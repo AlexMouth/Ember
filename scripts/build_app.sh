@@ -8,7 +8,8 @@ FLAGS=(-c release)
 for a in $ARCHS; do FLAGS+=(--arch $a); done
 swift build $FLAGS
 BIN=$(swift build $FLAGS --show-bin-path)
-APP=build/Ember.app
+BUILD_DIR=${BUILD_DIR:-build}
+APP=$BUILD_DIR/Ember.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/Ember" "$APP/Contents/MacOS/Ember"
@@ -31,5 +32,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict></plist>
 PLIST
 sed -i '' "s/__VERSION__/$VERSION/" "$APP/Contents/Info.plist"
+xattr -cr "$APP"
 codesign --force --deep --sign - "$APP"
+codesign --verify --deep --strict "$APP"
 echo "Built $APP"
