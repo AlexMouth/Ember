@@ -1,4 +1,6 @@
-# Ember 🔥
+<p align="center"><img src="assets/icon-1024.png" width="128" alt="Logo Ember"></p>
+
+# Ember
 
 Application macOS de barre des menus (SwiftUI) qui suit, **en local**, la consommation de tes IA de développement : dépense équivalente API, tokens, et quotas d'abonnement avec courbes de « burn-down ».
 
@@ -19,12 +21,24 @@ Application macOS de barre des menus (SwiftUI) qui suit, **en local**, la consom
 
 Tout est calculé sur ton Mac. Aucune donnée n'est envoyée, hormis l'appel Anthropic du quota Claude en direct (désactivable dans les Réglages).
 
-## Prérequis
+## Installation (sans compiler)
+
+1. Télécharge le dernier `Ember-x.y.z.dmg` depuis la page [Releases](https://github.com/AlexMouth/Ember/releases).
+2. Ouvre le `.dmg` et glisse **Ember** dans **Applications**.
+3. Au premier lancement, macOS peut bloquer l'app (elle est signée en ad-hoc, pas notarisée par Apple) : clic droit sur Ember → **Ouvrir** → **Ouvrir**. Si besoin :
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Ember.app
+```
+
+L'app est universelle (Apple Silicon et Intel), macOS 14 ou plus récent. Elle vit dans la barre des menus.
+
+## Compiler depuis les sources
+
+### Prérequis
 
 - macOS 14 ou plus récent
 - Toolchain Swift (Xcode ou Command Line Tools)
-
-## Compiler et lancer
 
 ```bash
 ./scripts/build_app.sh
@@ -32,6 +46,14 @@ open "$PWD/build/Ember.app"
 ```
 
 Le script compile en release et signe l'app en ad-hoc. Au premier lancement, macOS peut demander l'accès au trousseau (quota Claude) et aux notifications.
+
+Pour fabriquer les paquets de distribution (`dist/Ember-<version>.dmg` et `.zip`, binaire universel) :
+
+```bash
+VERSION=0.2.0 ./scripts/release.sh
+```
+
+Le logo se régénère avec `swift scripts/make_icon.swift && ./scripts/make_icns.sh`.
 
 Options de débogage : `Ember --dump` (affiche les données lues) et `Ember --snapshot <dossier>` (rend des PNG des vues).
 
