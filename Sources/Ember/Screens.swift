@@ -159,23 +159,25 @@ struct MenuBarView: View {
             Group {
                 if pop.tab == "general" { general } else { providerTab(pop.tab) }
             }
-            Divider()
-            HStack {
+            Button { openWindow(id: "dashboard"); NSApp.activate(ignoringOtherApps: true) } label: {
+                Label("Ouvrir le tableau de bord", systemImage: "rectangle.on.rectangle").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent).controlSize(.large).tint(.orange).keyboardShortcut("d")
+            HStack(spacing: 14) {
                 if let t = store.lastRefresh {
-                    Text("Mis à jour \(t.formatted(date: .omitted, time: .shortened))").font(.caption2).foregroundStyle(.tertiary)
+                    Text("Mis à jour \(t.formatted(date: .omitted, time: .shortened))").font(.caption).foregroundStyle(.tertiary)
                 }
                 Spacer()
-                Button { store.refresh() } label: { Image(systemName: "arrow.clockwise") }.buttonStyle(.plain).disabled(store.refreshing)
+                Button { store.refresh() } label: { Image(systemName: "arrow.clockwise") }
+                    .help("Actualiser").disabled(store.refreshing)
+                SettingsLink { Image(systemName: "gearshape") }.help("Réglages")
+                Button { NSApplication.shared.terminate(nil) } label: { Image(systemName: "power") }
+                    .help("Quitter Ember").keyboardShortcut("q")
             }
-            HStack {
-                Button { openWindow(id: "dashboard"); NSApp.activate(ignoringOtherApps: true) } label: {
-                    Label("Tableau de bord", systemImage: "rectangle.on.rectangle").frame(maxWidth: .infinity)
-                }.keyboardShortcut("d")
-                SettingsLink { Image(systemName: "gearshape") }
-                Button { NSApplication.shared.terminate(nil) } label: { Label("Quitter", systemImage: "power") }.keyboardShortcut("q")
-            }
+            .buttonStyle(.plain).foregroundStyle(.secondary).font(.system(size: 13))
         }
         .padding(14).frame(width: 372)
+        .environment(\.inPopover, true)
     }
 
     var tabBar: some View {
@@ -189,11 +191,11 @@ struct MenuBarView: View {
     func tabButton(_ id: String, _ title: String, _ icon: String) -> some View {
         Button { pop.tab = id } label: {
             HStack(spacing: 4) {
-                if id != "general" { ProviderIcon(id: id, symbol: icon, size: 14) }
+                if id != "general" { ProviderIcon(id: id, symbol: icon, size: 16) }
                 if id == "general" || pop.tab == id { Text(title).font(.caption).lineLimit(1) }
             }
-            .help(title).frame(maxWidth: .infinity).padding(.vertical, 5)
-                .background(pop.tab == id ? Color.secondary.opacity(0.25) : .clear, in: RoundedRectangle(cornerRadius: 8))
+            .help(title).frame(maxWidth: .infinity).padding(.vertical, 6)
+                .background(pop.tab == id ? Color.primary.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 8))
         }.buttonStyle(.plain)
     }
 
@@ -210,7 +212,7 @@ struct MenuBarView: View {
                 Tile(title: "Tokens", value: compact(store.totalTokens(month)), sub: "\(agents.count) sources", tint: .blue)
             }
             if !store.quotas.isEmpty {
-                Text("Quota restant").font(.caption).foregroundStyle(.secondary)
+                Text("Quota restant").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 2)
                 HStack(spacing: 10) {
                     ForEach(Array(Set(store.quotas.map(\.provider))).sorted(), id: \.self) { pid in
                         if let q = primaryQuota(store.quotas(for: pid)) {
@@ -227,10 +229,16 @@ struct MenuBarView: View {
             }
             let others = store.providers.filter { if case .detectedNoData = $0.status { return true } else { return false } }
             if !others.isEmpty {
-                Text("Autres IA détectées").font(.caption).foregroundStyle(.secondary)
-                ForEach(others) { DetectedRow(p: $0) }
+                Text("Autres IA détectées").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 2)
+                HStack(spacing: 8) {
+                    ForEach(others.prefix(7)) { p in ProviderIcon(id: p.id, symbol: p.symbol, size: 20).help(p.name) }
+                    if others.count > 7 { Text("+\(others.count - 7)").font(.caption.weight(.medium)).foregroundStyle(.secondary) }
+                    Spacer()
+                    Text("\(others.count) sans données").font(.caption).foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 10).frame(maxWidth: .infinity).card(radius: 10)
             }
-            Text("Sources les plus actives · 30 j").font(.caption).foregroundStyle(.secondary)
+            Text("Sources les plus actives · 30 j").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 2)
             ForEach(agents, id: \.0.id) { p, c, t in
                 VStack(spacing: 3) {
                     HStack {

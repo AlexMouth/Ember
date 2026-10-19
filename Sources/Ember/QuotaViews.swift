@@ -8,13 +8,30 @@ func color(for provider: String) -> Color { providerColors[provider] ?? .gray }
 
 
 /// Native-feeling grouped surface: system control background, hairline border, continuous corners.
+struct InPopoverKey: EnvironmentKey { static let defaultValue = false }
+extension EnvironmentValues {
+    var inPopover: Bool {
+        get { self[InPopoverKey.self] }
+        set { self[InPopoverKey.self] = newValue }
+    }
+}
+
 struct CardStyle: ViewModifier {
     var radius: CGFloat = 12
+    @Environment(\.inPopover) private var inPopover
     func body(content: Content) -> some View {
-        content
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(Color.primary.opacity(0.07), lineWidth: 0.5))
-            .shadow(color: .black.opacity(0.04), radius: 1.5, y: 0.5)
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        if inPopover {
+            // Translucent tile that lets the popover's vibrancy through instead of a heavy opaque block.
+            content
+                .background(Color.primary.opacity(0.07), in: shape)
+                .overlay(shape.strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+        } else {
+            content
+                .background(Color(nsColor: .controlBackgroundColor), in: shape)
+                .overlay(shape.strokeBorder(Color.primary.opacity(0.07), lineWidth: 0.5))
+                .shadow(color: .black.opacity(0.04), radius: 1.5, y: 0.5)
+        }
     }
 }
 extension View { func card(radius: CGFloat = 12) -> some View { modifier(CardStyle(radius: radius)) } }
