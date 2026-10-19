@@ -1,8 +1,10 @@
+import AppKit
+import Combine
 import SwiftUI
 
 @main
 struct EmberApp: App {
-    @StateObject private var store = Store()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     init() {
         if CommandLine.arguments.contains("--dump") { Self.dump(); exit(0) }
@@ -56,6 +58,22 @@ struct EmberApp: App {
         }
     }
 
+    var body: some Scene {
+        Settings {
+            SettingsView().environmentObject(delegate.store)
+        }
+    }
+}
+
+/// Owns the menu-bar item (popover anchored right under the icon) and the dashboard window.
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    let store = Store()
+    private var item: NSStatusItem?
+    private let popover = NSPopover()
+    private var dashboard: NSWindow?
+    private var bag = Set<AnyCancellable>()
+
     var menuLabel: String {
         switch store.menuMode {
         case "icon": return ""
@@ -66,25 +84,62 @@ struct EmberApp: App {
         }
     }
 
-    var body: some Scene {
-        Window("Ember", id: "dashboard") {
-            DashboardView().environmentObject(store)
-                .onAppear { NSApp.activate(ignoringOtherApps: true) }
-        }
-        .defaultSize(width: 900, height: 620)
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let it = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        it.button?.target = self
+        it.button?.action = #selector(toggle)
+        it.button?.imagePosition = .imageLeading
+        item = it
 
-        MenuBarExtra {
-            MenuBarView().environmentObject(store)
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "flame.fill")
-                if !menuLabel.isEmpty { Text(menuLabel).monospacedDigit() }
-            }
-        }
-        .menuBarExtraStyle(.window)
+        let host = NSHostingController(rootView: MenuBarView(
+            openDashboard: { [weak self] in self?.showDashboard() },
+            openSettings: { [weak self] in self?.showSettings() }
+        ).environmentObject(store))
+        host.sizingOptions = [.preferredContentSize]
+        popover.contentViewController = host
+        popover.behavior = .transient
+        popover.animates = true
 
-        Settings {
-            SettingsView().environmentObject(store)
+        store.objectWillChange.sink { [weak self] _ in
+            DispatchQueue.main.async { self?.updateLabel() }
+        }.store(in: &bag)
+        updateLabel()
+        Updater.shared.startAutoCheck()
+    }
+
+    private func updateLabel() {
+        guard let b = item?.button else { return }
+        b.image = NSImage(systemSymbolName: "flame.fill", accessibilityDescription: "Ember")
+        let t = menuLabel
+        b.attributedTitle = NSAttributedString(string: t.isEmpty ? "" : " " + t,
+            attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)])
+    }
+
+    @objc private func toggle() {
+        guard let b = item?.button else { return }
+        if popover.isShown { popover.performClose(nil); return }
+        popover.show(relativeTo: b.bounds, of: b, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.makeKey()
+    }
+
+    func showDashboard() {
+        popover.performClose(nil)
+        if dashboard == nil {
+            let w = NSWindow(contentViewController: NSHostingController(rootView: DashboardView().environmentObject(store)))
+            w.title = "Ember"
+            w.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+            w.setContentSize(NSSize(width: 900, height: 620))
+            w.isReleasedWhenClosed = false
+            w.center()
+            dashboard = w
         }
+        NSApp.activate(ignoringOtherApps: true)
+        dashboard?.makeKeyAndOrderFront(nil)
+    }
+
+    func showSettings() {
+        popover.performClose(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     }
 }

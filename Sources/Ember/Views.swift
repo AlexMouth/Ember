@@ -192,6 +192,8 @@ struct SettingsView: View {
             Text("Tout est calculé sur ton Mac. Aucune donnée n'est envoyée, sauf l'appel Anthropic si tu actives le quota Claude en direct.")
                 .font(.callout).multilineTextAlignment(.center).foregroundStyle(.secondary).frame(maxWidth: 380)
             Text("Prix des modèles : models.dev").font(.caption).foregroundStyle(.tertiary)
+            Divider().frame(width: 200)
+            UpdateRow().frame(maxWidth: 380)
         }.padding()
     }
 }

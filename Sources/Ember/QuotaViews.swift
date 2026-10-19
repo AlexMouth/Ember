@@ -18,20 +18,23 @@ extension EnvironmentValues {
 
 struct CardStyle: ViewModifier {
     var radius: CGFloat = 12
-    @Environment(\.inPopover) private var inPopover
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-        if inPopover {
-            // Translucent tile that lets the popover's vibrancy through instead of a heavy opaque block.
-            content
-                .background(Color.primary.opacity(0.07), in: shape)
-                .overlay(shape.strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+        if #available(macOS 26, *) {
+            // Liquid Glass surface.
+            content.glassEffect(.regular, in: shape)
         } else {
             content
-                .background(Color(nsColor: .controlBackgroundColor), in: shape)
-                .overlay(shape.strokeBorder(Color.primary.opacity(0.07), lineWidth: 0.5))
-                .shadow(color: .black.opacity(0.04), radius: 1.5, y: 0.5)
+                .background(Color.primary.opacity(0.06), in: shape)
+                .background(.thinMaterial, in: shape)
+                .overlay(shape.strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
         }
+    }
+}
+
+extension View {
+    @ViewBuilder func emberProminent() -> some View {
+        if #available(macOS 26, *) { buttonStyle(.glassProminent) } else { buttonStyle(.borderedProminent) }
     }
 }
 extension View { func card(radius: CGFloat = 12) -> some View { modifier(CardStyle(radius: radius)) } }

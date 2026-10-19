@@ -129,9 +129,11 @@ final class PopState: ObservableObject { @Published var tab = "general" }
 struct MenuBarView: View {
     @EnvironmentObject var store: Store
     @StateObject private var pop: PopState
-    @Environment(\.openWindow) private var openWindow
+    var openDashboard: () -> Void = {}
+    var openSettings: () -> Void = {}
 
-    init(tab: String = "general") {
+    init(tab: String = "general", openDashboard: @escaping () -> Void = {}, openSettings: @escaping () -> Void = {}) {
+        self.openDashboard = openDashboard; self.openSettings = openSettings
         let st = PopState(); st.tab = tab
         _pop = StateObject(wrappedValue: st)
     }
@@ -155,14 +157,15 @@ struct MenuBarView: View {
                 }
                 Spacer()
             }
+            UpdateBanner()
             tabBar
             Group {
                 if pop.tab == "general" { general } else { providerTab(pop.tab) }
             }
-            Button { openWindow(id: "dashboard"); NSApp.activate(ignoringOtherApps: true) } label: {
+            Button { openDashboard() } label: {
                 Label("Ouvrir le tableau de bord", systemImage: "rectangle.on.rectangle").frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent).controlSize(.large).tint(.orange).keyboardShortcut("d")
+            .emberProminent().controlSize(.large).tint(.orange).keyboardShortcut("d")
             HStack(spacing: 14) {
                 if let t = store.lastRefresh {
                     Text("Mis à jour \(t.formatted(date: .omitted, time: .shortened))").font(.caption).foregroundStyle(.tertiary)
@@ -170,7 +173,7 @@ struct MenuBarView: View {
                 Spacer()
                 Button { store.refresh() } label: { Image(systemName: "arrow.clockwise") }
                     .help("Actualiser").disabled(store.refreshing)
-                SettingsLink { Image(systemName: "gearshape") }.help("Réglages")
+                Button { openSettings() } label: { Image(systemName: "gearshape") }.help("Réglages")
                 Button { NSApplication.shared.terminate(nil) } label: { Image(systemName: "power") }
                     .help("Quitter Ember").keyboardShortcut("q")
             }
