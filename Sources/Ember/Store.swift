@@ -321,14 +321,20 @@ struct LiveError: Error { var message: String }
 
 enum LiveClaude {
     static func fetch() async -> Result<[QuotaWindow], LiveError> {
-        guard let token = readToken() else { return .failure(LiveError(message: "Jeton Claude Code introuvable ou expiré. Ouvrez Claude Code pour le renouveler.")) }
+        let tokens = readTokens()
+        guard !tokens.isEmpty else { return .failure(LiveError(message: "Aucun jeton Claude Code valide. Lancez `claude` dans un terminal puis /login pour vous reconnecter.")) }
         var req = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
         req.timeoutInterval = 15
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         do {
-            let (data, resp) = try await URLSession.shared.data(for: req)
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            var data = Data(), code = 0
+            for t in tokens {
+                req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization")
+                let (d, resp) = try await URLSession.shared.data(for: req)
+                data = d; code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                if code == 200 { break }
+            }
+            if code == 401 { return .failure(LiveError(message: "Jeton Claude Code expiré. Lancez `claude` dans un terminal puis /login pour vous reconnecter.")) }
             guard code == 200 else { return .failure(LiveError(message: "Réponse HTTP \(code)")) }
             guard let d = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return .failure(LiveError(message: "Format inattendu")) }
             var out: [QuotaWindow] = []
@@ -342,23 +348,48 @@ enum LiveClaude {
         } catch { return .failure(LiveError(message: error.localizedDescription)) }
     }
 
-    /// Reads the access token only. Never writes to the Keychain and never calls the refresh endpoint.
-    private static func readToken() -> String? {
+    /// Keychain service names Claude Code uses (one per config directory, e.g. "Claude Code-credentials-ab12cd34").
+    private static func credentialServices() -> [String] {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        p.arguments = ["find-generic-password", "-s", "Claude Code-credentials", "-w"]
+        p.arguments = ["dump-keychain"]
         let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = FileHandle.nullDevice
-        do { try p.run() } catch { return nil }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.standardOutput = pipe; p.standardError = FileHandle.nullDevice
+        var names = ["Claude Code-credentials"]
+        guard (try? p.run()) != nil else { return names }
+        let text = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         p.waitUntilExit()
-        guard p.terminationStatus == 0,
-            let o = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-            let oauth = o["claudeAiOauth"] as? [String: Any],
-            let token = oauth["accessToken"] as? String
-        else { return nil }
-        if let exp = oauth["expiresAt"] as? Double, exp < Date().timeIntervalSince1970 * 1000 { return nil }
-        return token
+        for line in text.split(separator: "\n") where line.contains("\"svce\"") {
+            if let r = line.range(of: "\"Claude Code-credentials[^\"]*\"", options: .regularExpression) {
+                let n = String(line[r]).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+                if !names.contains(n) { names.append(n) }
+            }
+        }
+        return names
+    }
+
+    /// Reads access tokens only (newest first). Never writes to the Keychain and never calls the refresh endpoint.
+    private static func readTokens() -> [String] {
+        var found: [(token: String, exp: Double)] = []
+        for service in credentialServices() {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+            p.arguments = ["find-generic-password", "-s", service, "-w"]
+            let pipe = Pipe()
+            p.standardOutput = pipe
+            p.standardError = FileHandle.nullDevice
+            do { try p.run() } catch { continue }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            guard p.terminationStatus == 0,
+                let o = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                let oauth = o["claudeAiOauth"] as? [String: Any],
+                let token = oauth["accessToken"] as? String, !token.isEmpty
+            else { continue }
+            let exp = oauth["expiresAt"] as? Double ?? 0
+            if exp > 0, exp < Date().timeIntervalSince1970 * 1000 { continue }
+            found.append((token, exp))
+        }
+        return found.sorted { $0.exp > $1.exp }.map(\.token)
     }
 }
