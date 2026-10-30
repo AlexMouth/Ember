@@ -11,7 +11,8 @@ final class Updater: ObservableObject {
     enum State: Equatable {
         case idle, checking, upToDate
         case available(version: String, url: URL)
-        case downloading, installing
+        case downloading(Double)  // 0...1
+        case installing
         case failed(String)
     }
 
@@ -29,7 +30,7 @@ final class Updater: ObservableObject {
         }
     }
 
-    private static func newer(_ a: String, than b: String) -> Bool {
+    nonisolated static func newer(_ a: String, than b: String) -> Bool {
         let x = a.split(separator: ".").map { Int($0) ?? 0 }, y = b.split(separator: ".").map { Int($0) ?? 0 }
         for i in 0..<max(x.count, y.count) {
             let l = i < x.count ? x[i] : 0, r = i < y.count ? y[i] : 0
@@ -68,10 +69,22 @@ final class Updater: ObservableObject {
 
     func install() {
         guard case .available(_, let url) = state else { return }
-        state = .downloading
+        let target = Bundle.main.bundleURL
+        guard target.pathExtension == "app", !target.path.contains("/.build/") else {
+            state = .failed("Ember ne tourne pas depuis une app installée. Installez-la dans /Applications pour activer la mise à jour.")
+            return
+        }
+        guard FileManager.default.isWritableFile(atPath: target.deletingLastPathComponent().path) else {
+            state = .failed("Dossier d'installation non modifiable : \(target.deletingLastPathComponent().path)")
+            return
+        }
+        state = .downloading(0)
         Task {
             do {
-                let (tmp, resp) = try await URLSession.shared.download(from: url)
+                let progress = DownloadProgress { f in Task { @MainActor in
+                    if case .downloading = Updater.shared.state { Updater.shared.state = .downloading(f) }
+                } }
+                let (tmp, resp) = try await URLSession.shared.download(from: url, delegate: progress)
                 guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
                 let work = FileManager.default.temporaryDirectory.appendingPathComponent("ember-update-\(UUID().uuidString)")
                 try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
@@ -82,10 +95,6 @@ final class Updater: ObservableObject {
                 let newApp = out.appendingPathComponent("Ember.app")
                 guard FileManager.default.fileExists(atPath: newApp.path) else { throw URLError(.cannotParseResponse) }
                 try Self.run("/usr/bin/codesign", ["--verify", "--deep", "--strict", newApp.path])
-                let target = Bundle.main.bundleURL
-                guard FileManager.default.isWritableFile(atPath: target.deletingLastPathComponent().path) else {
-                    throw NSError(domain: "Updater", code: 2, userInfo: [NSLocalizedDescriptionKey: "Dossier d'installation non modifiable : \(target.deletingLastPathComponent().path)"])
-                }
                 state = .installing
                 let script = """
                 while kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null; do sleep 0.2; done
@@ -113,6 +122,15 @@ final class Updater: ObservableObject {
     }
 }
 
+private final class DownloadProgress: NSObject, URLSessionDownloadDelegate {
+    let onProgress: (Double) -> Void
+    init(_ f: @escaping (Double) -> Void) { onProgress = f }
+    func urlSession(_ s: URLSession, downloadTask t: URLSessionDownloadTask, didWriteData _: Int64, totalBytesWritten w: Int64, totalBytesExpectedToWrite e: Int64) {
+        if e > 0 { onProgress(Double(w) / Double(e)) }
+    }
+    func urlSession(_ s: URLSession, downloadTask t: URLSessionDownloadTask, didFinishDownloadingTo l: URL) {}
+}
+
 /// Status line + action button, reused in the popover and in Settings.
 struct UpdateRow: View {
     @ObservedObject var up = Updater.shared
@@ -130,8 +148,9 @@ struct UpdateRow: View {
                 Text("Version \(v) disponible").fontWeight(.medium)
                 Spacer()
                 Button("Mettre à jour") { up.install() }.emberProminent().tint(.orange)
-            case .downloading:
-                ProgressView().controlSize(.small); Text("Téléchargement…").foregroundStyle(.secondary); Spacer()
+            case .downloading(let f):
+                ProgressView(value: f).frame(width: 90)
+                Text("Téléchargement \(Int(f * 100)) %").foregroundStyle(.secondary).monospacedDigit(); Spacer()
             case .installing:
                 ProgressView().controlSize(.small); Text("Installation, redémarrage…").foregroundStyle(.secondary); Spacer()
             case .failed(let m):

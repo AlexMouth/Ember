@@ -12,6 +12,7 @@ struct Entry: Codable, Hashable {
     var cacheRead: Int
     var cacheWrite: Int
     var estimated: Bool = false
+    var session: String? = nil  // conversation id, when the source exposes one
 }
 
 /// A quota window read from a local file or a live endpoint.

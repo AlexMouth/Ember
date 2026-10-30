@@ -19,6 +19,7 @@ final class Store: ObservableObject {
     @Published var lastRefresh: Date?
     @Published var refreshing = false
     @Published var liveStatus = ""
+    @Published var session: SessionInfo?
 
     @AppStorage("monthlyBudget") var monthlyBudget: Double = 0
     @AppStorage("liveClaude") var liveClaude = true
@@ -27,6 +28,7 @@ final class Store: ObservableObject {
     @AppStorage("menuMode") var menuMode = "auto"          // auto | quota | cost | icon
     @AppStorage("menuProvider") var menuProvider = "claude"
     @AppStorage("quotaAlert") var quotaAlert = 0            // 0 = off, else % remaining threshold
+    @AppStorage("quotaAlertFull") var quotaAlertFull = true  // also notify when a window is exhausted
     @AppStorage("alertedQuotas") private var alertedQuotas = ""
 
     private let cache = FileCache()
@@ -80,6 +82,7 @@ final class Store: ObservableObject {
                 .map { e in (e.ts, Pricing.shared.cost(UsageRecord(provider: "claude", model: e.model, project: "", day: "",
                     input: e.input, output: e.output, cacheRead: e.cacheRead, cacheWrite: e.cacheWrite))) }
                 .sorted { $0.0 < $1.0 }
+            let session = SessionInfo.latest(from: outputs.filter { $0.0.id == "claude" }.flatMap { $0.1.entries })
             let infos: [ProviderInfo] = all.map { p in
                 let n = recs.filter { $0.provider == p.id }.count
                 let status: ProviderStatus
@@ -90,7 +93,7 @@ final class Store: ObservableObject {
                 return ProviderInfo(id: p.id, name: p.name, symbol: p.symbol, status: status, paths: p.paths)
             }
             await MainActor.run {
-                self.records = recs; self.hours = hrs; self.providers = infos; self.claudeCosts = costs
+                self.records = recs; self.hours = hrs; self.providers = infos; self.claudeCosts = costs; self.session = session
                 self.merge(samples)
                 self.lastRefresh = Date(); self.refreshing = false
                 self.checkBudget()
@@ -282,17 +285,23 @@ final class Store: ObservableObject {
 
     /// One notification per quota window, the first time it drops under the chosen threshold.
     private func checkQuotas() {
-        guard quotaAlert > 0 else { return }
+        guard quotaAlert > 0 || quotaAlertFull else { return }
         var seen = alertedQuotas.split(separator: ",").map(String.init)
         for q in quotas {
-            guard let r = q.resetsAt, 100 - q.usedPercent <= Double(quotaAlert) else { continue }
-            let key = q.id + "@" + String(Int(r.timeIntervalSince1970 / 60))
-            guard !seen.contains(key) else { continue }
-            seen.append(key)
-            notify("Ember — \(providerName(q.provider)) : \(q.title)",
-                   String(format: "Il reste %.0f %% de quota. %@", 100 - q.usedPercent, resetText(r)), id: key)
+            guard let r = q.resetsAt else { continue }
+            let win = q.id + "@" + String(Int(r.timeIntervalSince1970 / 60))
+            let left = 100 - q.usedPercent
+            if quotaAlertFull, left <= 0.5, !seen.contains(win + "!") {
+                seen.append(win + "!")
+                notify("Ember — \(providerName(q.provider)) : \(q.title)",
+                       "Limite atteinte. \(resetText(r))", id: win + "!")
+            } else if quotaAlert > 0, left <= Double(quotaAlert), left > 0.5, !seen.contains(win) {
+                seen.append(win)
+                notify("Ember — \(providerName(q.provider)) : \(q.title)",
+                       String(format: "Il reste %.0f %% de quota. %@", left, resetText(r)), id: win)
+            }
         }
-        alertedQuotas = seen.suffix(30).joined(separator: ",")
+        alertedQuotas = seen.suffix(40).joined(separator: ",")
     }
 
     func resetHistory() {

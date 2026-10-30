@@ -122,6 +122,69 @@ struct QuotaMissing: View {
     }
 }
 
+/// The Claude Code conversation in progress (or the latest one).
+struct SessionCard: View {
+    let s: SessionInfo
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Circle().fill(s.isLive ? Color.green : Color.gray).frame(width: 7, height: 7)
+                Text(s.isLive ? "Session en cours" : "Dernière session").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Spacer()
+                Text(s.isLive ? "active" : s.last.formatted(.relative(presentation: .named))).font(.caption).foregroundStyle(.tertiary)
+            }
+            HStack(alignment: .firstTextBaseline) {
+                Text(s.project.isEmpty ? "Sans projet" : s.project).font(.callout.weight(.semibold)).lineLimit(1)
+                Spacer()
+                Text(money(s.cost)).font(.system(size: 20, weight: .bold, design: .rounded)).monospacedDigit()
+            }
+            HStack(spacing: 12) {
+                Label(durationText(s.duration), systemImage: "clock").lineLimit(1).fixedSize()
+                Label(compact(s.tokens), systemImage: "circle.grid.2x2")
+                Label("\(s.messages) msg", systemImage: "bubble.left")
+                Spacer()
+                Text(s.model).lineLimit(1).foregroundStyle(.tertiary)
+            }.font(.caption).foregroundStyle(.secondary).labelStyle(.titleAndIcon)
+        }
+        .padding(12).frame(maxWidth: .infinity, alignment: .leading).card(radius: 12)
+    }
+}
+
+func durationText(_ t: TimeInterval) -> String {
+    let m = Int(t / 60)
+    if m >= 1440 { return "\(m / 1440) j \((m % 1440) / 60) h" }
+    return m >= 60 ? "\(m / 60) h \(m % 60) min" : "\(max(m, 1)) min"
+}
+
+/// Offered when the live Claude quota cannot be read (token missing or expired).
+struct ReconnectBanner: View {
+    @EnvironmentObject var store: Store
+    var failing: Bool { store.liveClaude && !store.liveStatus.isEmpty && store.liveStatus != "OK" }
+    var body: some View {
+        if failing {
+            HStack(spacing: 10) {
+                Image(systemName: "key.slash").foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Quota Claude déconnecté").font(.callout.weight(.medium))
+                    Text("Reconnecte-toi avec /login, puis actualise.").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Se reconnecter") { Self.openLogin() }.emberProminent().tint(.orange).controlSize(.small)
+            }
+            .padding(10).card(radius: 10)
+        }
+    }
+
+    /// Opens Terminal on `claude /login` through a throwaway .command file (no Automation permission needed).
+    static func openLogin() {
+        let f = FileManager.default.temporaryDirectory.appendingPathComponent("ember-login.command")
+        let script = "#!/bin/zsh -l\nclear\necho \"Reconnexion de Claude Code…\"\nclaude /login\n"
+        try? script.write(to: f, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: f.path)
+        NSWorkspace.shared.open(f)
+    }
+}
+
 // MARK: - Menu bar popover
 
 final class PopState: ObservableObject { @Published var tab = "general" }
@@ -158,6 +221,7 @@ struct MenuBarView: View {
                 Spacer()
             }
             UpdateBanner()
+            ReconnectBanner()
             tabBar
             Group {
                 if pop.tab == "general" { general } else { providerTab(pop.tab) }
@@ -210,6 +274,7 @@ struct MenuBarView: View {
         }.sorted { $0.1 > $1.1 }
         let maxCost = max(agents.first?.1 ?? 1, 0.0001)
         return VStack(alignment: .leading, spacing: 12) {
+            if let s = store.session { SessionCard(s: s) }
             HStack(spacing: 10) {
                 Tile(title: "Dépense 30 j", value: money(store.totalCost(month)), sub: "équivalent API")
                 Tile(title: "Tokens", value: compact(store.totalTokens(month)), sub: "\(agents.count) sources", tint: .blue)
@@ -261,6 +326,7 @@ struct MenuBarView: View {
         let qs = store.quotas(for: id)
         let rs = store.filtered(.month, provider: id)
         return VStack(alignment: .leading, spacing: 10) {
+            if id == "claude", let s = store.session { SessionCard(s: s) }
             if let q = primaryQuota(qs) {
                 QuotaPanel(info: store.info(q), height: 130)
                 ForEach(qs.filter { $0 != q }) { o in
@@ -489,6 +555,10 @@ struct OverviewPage: View {
                 }
             }
             SpendChart(data: data, ui: ui, stacked: true)
+            HStack(alignment: .top, spacing: gridSpacing) {
+                BreakdownCard(title: "Par modèle", data: data, key: \.model, tint: .orange)
+                BreakdownCard(title: "Par projet", data: data, key: \.project, tint: .blue)
+            }
             let approx = Set(data.filter { Pricing.shared.isApproximate($0.model) }.map(\.model))
             if !approx.isEmpty {
                 Text("Prix approchés par famille pour : " + approx.sorted().joined(separator: ", ") + ". Corrigez-les dans ~/Library/Application Support/Ember/pricing-overrides.json.")
@@ -564,6 +634,38 @@ struct ProviderPage: View {
                     }
                 })
             }
+        }
+    }
+}
+
+/// Top-N cost ranking over any record field (model, project…).
+struct BreakdownCard: View {
+    @EnvironmentObject var store: Store
+    let title: String
+    let data: [UsageRecord]
+    let key: KeyPath<UsageRecord, String>
+    var tint: Color = .orange
+
+    var body: some View {
+        let rows = Dictionary(grouping: data, by: { $0[keyPath: key] }).map { (name: $0.key, cost: store.totalCost($0.value), tokens: store.totalTokens($0.value)) }
+            .sorted { $0.cost > $1.cost }
+        let top = Array(rows.prefix(8))
+        let maxCost = max(top.first?.cost ?? 1, 0.0001)
+        return Section_(title: title, trailing: "top \(top.count) sur \(rows.count)") {
+            AnyView(VStack(spacing: 9) {
+                if top.isEmpty { Text("Aucune donnée.").foregroundStyle(.secondary) }
+                ForEach(top, id: \.name) { r in
+                    VStack(spacing: 3) {
+                        HStack {
+                            Text(r.name.isEmpty ? "—" : r.name).lineLimit(1).truncationMode(.middle)
+                            Spacer()
+                            Text(compact(r.tokens)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            Text(money(r.cost)).font(.callout.weight(.medium).monospacedDigit()).frame(width: 64, alignment: .trailing)
+                        }
+                        shareBar(r.cost / maxCost, tint)
+                    }
+                }
+            })
         }
     }
 }

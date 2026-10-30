@@ -15,8 +15,11 @@ Application macOS de barre des menus (SwiftUI) qui suit, **en local**, la consom
   - historique conservé 35 jours (`~/Library/Application Support/Ember/quota-history.json`).
 - **Quota Claude en direct** (activé par défaut) : lecture seule du jeton de Claude Code dans le trousseau, appel à `api.anthropic.com`. Le jeton n'est jamais renouvelé ni écrit. L'historique du début de la fenêtre en cours est reconstitué à partir de ta consommation.
 - **Tableau de bord** : aperçu (dépense, tokens, rythme, projection du mois), graphique de dépense jour/semaine/mois par source, pages par agent (modèles, projets, répartition des tokens).
-- **Popover** dans la barre des menus, avec onglets par agent.
-- **Alertes** : budget mensuel (80 % / 100 %) et seuil de quota restant, via notifications macOS.
+- **Session en cours** (Claude Code) : projet, durée, coût, tokens et modèle de la conversation active, dans le popover.
+- **Répartition par modèle et par projet** dans l'aperçu du tableau de bord (top 8, toutes sources confondues).
+- **Popover** dans la barre des menus, avec onglets par agent. Si le quota Claude ne peut plus être lu (jeton expiré), une bannière propose de se reconnecter (ouvre Terminal sur `claude /login`).
+- **Mise à jour intégrée** depuis les Releases GitHub, avec progression du téléchargement.
+- **Alertes** : budget mensuel (80 % / 100 %), seuil de quota restant au choix et notification quand une limite est atteinte (100 %), via notifications macOS.
 - **Export CSV**, prix des modèles modifiables (`pricing-overrides.json`), lancement à l'ouverture de session.
 
 Tout est calculé sur ton Mac. Aucune donnée n'est envoyée, hormis l'appel Anthropic du quota Claude en direct (désactivable dans les Réglages).
@@ -54,6 +57,12 @@ VERSION=0.2.0 ./scripts/release.sh
 ```
 
 Le logo se régénère avec `swift scripts/make_icon.swift && ./scripts/make_icns.sh`.
+
+Tests automatisés (prix, projections de quota, lecture des journaux) :
+
+```bash
+swift test
+```
 
 Options de débogage : `Ember --dump` (affiche les données lues) et `Ember --snapshot <dossier>` (rend des PNG des vues).
 

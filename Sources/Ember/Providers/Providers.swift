@@ -21,7 +21,7 @@ struct ClaudeCode: UsageProvider {
         return out
     }
 
-    private func parse(_ path: String) -> [Entry] {
+    func parse(_ path: String) -> [Entry] {
         var best: [String: Entry] = [:]
         readLines(path) { line in
             // Cheap pre-filter: only assistant lines carry usage.
@@ -37,7 +37,8 @@ struct ClaudeCode: UsageProvider {
                 key: key, ts: ts.timeIntervalSince1970, model: model,
                 project: shortProject(d["cwd"] as? String ?? ""),
                 input: int(u["input_tokens"]), output: int(u["output_tokens"]),
-                cacheRead: int(u["cache_read_input_tokens"]), cacheWrite: int(u["cache_creation_input_tokens"]))
+                cacheRead: int(u["cache_read_input_tokens"]), cacheWrite: int(u["cache_creation_input_tokens"]),
+                session: d["sessionId"] as? String)
             // Streaming writes the same message several times; the last has final counts.
             if let old = best[key], old.output > e.output { return }
             best[key] = e

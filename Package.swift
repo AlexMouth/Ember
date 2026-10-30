@@ -9,6 +9,7 @@ let package = Package(
             name: "Ember",
             resources: [.copy("Resources/pricing.json")],
             swiftSettings: []
-        )
+        ),
+        .testTarget(name: "EmberTests", dependencies: ["Ember"])
     ]
 )

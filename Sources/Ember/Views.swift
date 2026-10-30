@@ -27,25 +27,28 @@ func resetText(_ d: Date?) -> String {
 struct SourcesView: View {
     @EnvironmentObject var store: Store
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("IA détectées sur ce Mac").font(.headline)
-            ForEach(store.providers.filter { $0.status != .notInstalled }) { p in
-                HStack(alignment: .top, spacing: 10) {
-                    ProviderIcon(id: p.id, symbol: p.symbol, size: 22)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(p.name).font(.callout.weight(.medium))
-                        switch p.status {
-                        case .active(let n): Text("Suivi actif · \(n) séries").font(.caption).foregroundStyle(.green)
-                        case .detectedNoData(let r): Text(r).font(.caption).foregroundStyle(.secondary)
-                        case .notInstalled: EmptyView()
+        let list = VStack(alignment: .leading, spacing: 10) {
+                Text("IA détectées sur ce Mac").font(.title3.weight(.semibold))
+                ForEach(store.providers.filter { $0.status != .notInstalled }) { p in
+                    HStack(alignment: .top, spacing: 12) {
+                        ProviderIcon(id: p.id, symbol: p.symbol, size: 24)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(p.name).font(.callout.weight(.semibold))
+                            switch p.status {
+                            case .active(let n):
+                                HStack(spacing: 5) { Circle().fill(.green).frame(width: 6, height: 6); Text("Suivi actif · \(n) série\(n > 1 ? "s" : "")") }
+                                    .font(.caption).foregroundStyle(.green)
+                            case .detectedNoData(let r): Text(r).font(.caption).foregroundStyle(.secondary)
+                            case .notInstalled: EmptyView()
+                            }
+                            Text("Lit : " + p.paths.joined(separator: " · ")).font(.caption2).foregroundStyle(.tertiary).lineLimit(2)
                         }
-                        Text("Lit : " + p.paths.joined(separator: " · ")).font(.caption2).foregroundStyle(.tertiary)
+                        Spacer()
                     }
-                    Spacer()
+                    .padding(12).frame(maxWidth: .infinity, alignment: .leading).card(radius: 12)
                 }
-                Divider()
-            }
-        }.padding()
+        }.padding(20)
+        return SnapshotMode.on ? AnyView(list) : AnyView(ScrollView { list })
     }
 }
 
@@ -61,6 +64,32 @@ final class LoginState: ObservableObject {
     }
 }
 
+/// A titled glass card used by every settings tab.
+struct SCard<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary).textCase(.uppercase)
+            VStack(alignment: .leading, spacing: 10) { content }
+                .padding(14).frame(maxWidth: .infinity, alignment: .leading).card(radius: 12)
+        }
+    }
+}
+
+func note(_ t: String) -> some View { Text(t).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+
+/// ImageRenderer cannot draw ScrollViews, so `--snapshot` flips this.
+enum SnapshotMode { nonisolated(unsafe) static var on = false }
+
+struct SettingsPane<Content: View>: View {
+    @ViewBuilder var content: Content
+    var body: some View {
+        let body = VStack(alignment: .leading, spacing: 18) { content }.padding(20)
+        if SnapshotMode.on { body } else { ScrollView { body } }
+    }
+}
+
 final class SettingsFlags: ObservableObject { @Published var confirmReset = false }
 
 struct SettingsView: View {
@@ -73,7 +102,16 @@ struct SettingsView: View {
         return store.providers.filter { ids.contains($0.id) }
     }
 
+    /// Renders a single tab without the TabView (used by `--snapshot`).
+    var only: String? = nil
+
     var body: some View {
+        if let only {
+            Group { only == "alerts" ? AnyView(alerts) : AnyView(general) }
+        } else { tabs }
+    }
+
+    var tabs: some View {
         TabView {
             general.tabItem { Label("Général", systemImage: "gearshape") }
             alerts.tabItem { Label("Alertes", systemImage: "bell.badge") }
@@ -82,15 +120,15 @@ struct SettingsView: View {
             SourcesView().tabItem { Label("Sources", systemImage: "square.stack.3d.up") }
             about.tabItem { Label("À propos", systemImage: "info.circle") }
         }
-        .frame(width: 580, height: 440)
+        .frame(width: 600, height: 500)
     }
 
     var general: some View {
-        Form {
-            Section("Démarrage") {
+        SettingsPane {
+            SCard(title: "Démarrage") {
                 Toggle("Lancer Ember à l'ouverture de session", isOn: $login.enabled)
             }
-            Section("Barre des menus") {
+            SCard(title: "Barre des menus") {
                 Picker("Afficher", selection: store.$menuMode) {
                     Text("Quota si dispo, sinon dépense du jour").tag("auto")
                     Text("Quota restant").tag("quota")
@@ -103,26 +141,25 @@ struct SettingsView: View {
                     }
                 }
             }
-            Section("Actualisation") {
+            SCard(title: "Actualisation") {
                 Stepper("Toutes les \(store.refreshMinutes) min", value: store.$refreshMinutes, in: 1...30)
                     .onChange(of: store.refreshMinutes) { _, _ in store.schedule() }
                 Text("Ember actualise aussi chaque fois que tu reviens sur l'app.").font(.caption).foregroundStyle(.secondary)
             }
-        }.formStyle(.grouped)
+        }
     }
 
     var alerts: some View {
-        Form {
-            Section("Budget mensuel") {
+        SettingsPane {
+            SCard(title: "Budget mensuel") {
                 HStack {
                     Text("Budget (USD)")
                     Spacer()
                     TextField("0 = désactivé", value: store.$monthlyBudget, format: .number).frame(width: 110).multilineTextAlignment(.trailing)
                 }
-                Text("Notification à 80 % puis à 100 % du budget. Prévision de fin de mois : \(money(store.monthProjection)).")
-                    .font(.caption).foregroundStyle(.secondary)
+                note("Notification à 80 % puis à 100 % du budget. Prévision de fin de mois : \(money(store.monthProjection)).")
             }
-            Section("Quotas") {
+            SCard(title: "Quotas") {
                 Picker("Prévenir sous", selection: store.$quotaAlert) {
                     Text("Jamais").tag(0)
                     Text("30 % restants").tag(30)
@@ -130,31 +167,30 @@ struct SettingsView: View {
                     Text("10 % restants").tag(10)
                     Text("5 % restants").tag(5)
                 }
-                Text("Une seule notification par fenêtre (5 h, hebdomadaire…), la première fois que le seuil est franchi.")
-                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Prévenir aussi quand la limite est atteinte (100 %)", isOn: store.$quotaAlertFull)
+                note("Une seule notification par fenêtre (5 h, hebdomadaire…) et par seuil.")
             }
-            Section {
+            SCard(title: "Test") {
                 Button("Envoyer une notification de test") {
                     store.notify("Ember", "Les notifications fonctionnent.", id: "test-" + UUID().uuidString)
                 }
             }
-        }.formStyle(.grouped)
+        }
     }
 
     var quota: some View {
-        Form {
-            Section("Quota Claude en direct (optionnel)") {
+        SettingsPane {
+            SCard(title: "Quota Claude en direct (optionnel)") {
                 Toggle("Lire le quota réel depuis le compte Claude", isOn: store.$liveClaude)
-                Text("Activé par défaut. Ember lit le jeton de Claude Code dans ton trousseau (lecture seule, macOS peut demander l'autorisation la première fois) et interroge api.anthropic.com. Il ne renouvelle jamais le jeton et n'écrit jamais dans le trousseau. Le quota n'est connu que pour le présent : la courbe du début de la fenêtre en cours est reconstituée à partir de ta consommation Claude Code et mise à l'échelle sur le niveau réel.")
-                    .font(.caption).foregroundStyle(.secondary)
+                note("Activé par défaut. Ember lit le jeton de Claude Code dans ton trousseau (lecture seule, macOS peut demander l'autorisation la première fois) et interroge api.anthropic.com. Il ne renouvelle jamais le jeton et n'écrit jamais dans le trousseau. Le quota n'est connu que pour le présent : la courbe du début de la fenêtre en cours est reconstituée à partir de ta consommation Claude Code et mise à l'échelle sur le niveau réel.")
                 if !store.liveStatus.isEmpty { Label(store.liveStatus, systemImage: "info.circle").font(.caption) }
             }
-        }.formStyle(.grouped)
+        }
     }
 
     var data: some View {
-        Form {
-            Section("Fichiers") {
+        SettingsPane {
+            SCard(title: "Fichiers") {
                 Button("Ouvrir le dossier de données") { NSWorkspace.shared.open(URL(fileURLWithPath: Paths.support)) }
                 Button("Modifier les prix des modèles…") {
                     let f = Paths.support + "/pricing-overrides.json"
@@ -163,21 +199,18 @@ struct SettingsView: View {
                     }
                     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: f)])
                 }
-                Text("Prix en USD par million de tokens : [entrée, sortie, cache lu, cache écrit]. Pris en compte au prochain lancement.")
-                    .font(.caption).foregroundStyle(.secondary)
+                note("Prix en USD par million de tokens : [entrée, sortie, cache lu, cache écrit]. Pris en compte au prochain lancement.")
             }
-            Section("Export") {
+            SCard(title: "Export") {
                 Button("Exporter tout en CSV…") {
                     if let u = store.exportCSV() { NSWorkspace.shared.activateFileViewerSelecting([u]) }
                 }
             }
-            Section("Réinitialiser") {
+            SCard(title: "Réinitialiser") {
                 Button("Effacer l'historique de quota et le cache…", role: .destructive) { flags.confirmReset = true }
-                Text("Les journaux des IA ne sont jamais touchés : Ember reconstruit tout au prochain scan.")
-                    .font(.caption).foregroundStyle(.secondary)
+                note("Les journaux des IA ne sont jamais touchés : Ember reconstruit tout au prochain scan.")
             }
         }
-        .formStyle(.grouped)
         .confirmationDialog("Effacer l'historique de quota d'Ember ?", isPresented: $flags.confirmReset) {
             Button("Effacer", role: .destructive) { store.resetHistory() }
         }

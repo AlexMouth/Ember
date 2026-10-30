@@ -36,10 +36,12 @@ struct EmberApp: App {
                 let store = Store()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
                     MainActor.assumeIsolated {
+                        SnapshotMode.on = true
                         let ui = DashState()
-                        @MainActor func save<V: View>(_ v: V, _ name: String, w: CGFloat) {
+                        @MainActor func save<V: View>(_ v: V, _ name: String, w: CGFloat, dark: Bool = true) {
                             let r = ImageRenderer(content: v.environmentObject(store).frame(width: w)
-                                .padding(0).background(Color(white: 0.11)).environment(\.colorScheme, .dark))
+                                .padding(0).background(dark ? Color(white: 0.11) : Color(white: 0.96))
+                                .environment(\.colorScheme, dark ? .dark : .light))
                             r.scale = 2
                             if let img = r.nsImage, let t = img.tiffRepresentation, let b = NSBitmapImageRep(data: t),
                                let png = b.representation(using: .png, properties: [:]) {
@@ -51,6 +53,11 @@ struct EmberApp: App {
                         save(OverviewPage(data: store.filtered(.all), ui: ui).padding(20), "overview", w: 980)
                         save(ProviderPage(id: "claude", data: store.filtered(.all, provider: "claude"), ui: ui).padding(20), "claude", w: 980)
                         save(ProviderPage(id: "codex", data: store.filtered(.all, provider: "codex"), ui: ui).padding(20), "codex", w: 980)
+                        save(SettingsView(only: "alerts").frame(height: 480), "settings-alerts", w: 600)
+                        save(SettingsView(only: "general").frame(height: 480), "settings-general", w: 600)
+                        save(SourcesView().frame(height: 480), "sources", w: 600)
+                        save(MenuBarView(), "popover-general-light", w: 372, dark: false)
+                        save(SettingsView(only: "alerts").frame(height: 480), "settings-alerts-light", w: 600, dark: false)
                         exit(0)
                     }
                 }

@@ -77,3 +77,33 @@ func shortProject(_ cwd: String) -> String {
     if cwd == home { return "~" }
     return (cwd as NSString).lastPathComponent
 }
+
+/// The Claude Code conversation that produced the most recent activity.
+struct SessionInfo: Equatable {
+    var project: String
+    var model: String
+    var start: Date
+    var last: Date
+    var messages: Int
+    var tokens: Int
+    var cost: Double
+
+    /// Live while the last message is under ten minutes old.
+    var isLive: Bool { Date().timeIntervalSince(last) < 600 }
+    var duration: TimeInterval { last.timeIntervalSince(start) }
+
+    static func latest(from entries: [Entry]) -> SessionInfo? {
+        guard let newest = entries.filter({ $0.session != nil }).max(by: { $0.ts < $1.ts }), let id = newest.session
+        else { return nil }
+        let mine = entries.filter { $0.session == id }
+        let cost = mine.reduce(0.0) {
+            $0 + Pricing.shared.cost(UsageRecord(provider: "claude", model: $1.model, project: "", day: "", input: $1.input,
+                                                 output: $1.output, cacheRead: $1.cacheRead, cacheWrite: $1.cacheWrite))
+        }
+        return SessionInfo(
+            project: newest.project, model: newest.model,
+            start: Date(timeIntervalSince1970: mine.map(\.ts).min() ?? newest.ts),
+            last: Date(timeIntervalSince1970: newest.ts), messages: mine.count,
+            tokens: mine.reduce(0) { $0 + $1.input + $1.output + $1.cacheRead + $1.cacheWrite }, cost: cost)
+    }
+}
