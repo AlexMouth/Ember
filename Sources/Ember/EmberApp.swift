@@ -112,6 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }.store(in: &bag)
         updateLabel()
         Updater.shared.startAutoCheck()
+        if CommandLine.arguments.contains("--open-dashboard") { showDashboard() }
     }
 
     private func updateLabel() {
@@ -137,6 +138,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             w.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
             w.setContentSize(NSSize(width: 900, height: 620))
             w.isReleasedWhenClosed = false
+            w.titlebarAppearsTransparent = true
+            w.titleVisibility = .hidden
+            w.isOpaque = false
+            w.backgroundColor = .clear
             w.center()
             dashboard = w
         }

@@ -66,7 +66,7 @@ struct Tile: View {
             Text(sub.isEmpty ? " " : sub).font(.caption2).foregroundStyle(.tertiary)
         }
         .padding(14).frame(maxWidth: .infinity, minHeight: 86, alignment: .topLeading)
-        .card()
+        .card(tint: tint)
     }
 }
 
@@ -241,9 +241,10 @@ struct MenuBarView: View {
                 Button { NSApplication.shared.terminate(nil) } label: { Image(systemName: "power") }
                     .help("Quitter Ember").keyboardShortcut("q")
             }
-            .buttonStyle(.plain).foregroundStyle(.secondary).font(.system(size: 13))
+            .emberGlass().controlSize(.small).foregroundStyle(.secondary)
         }
         .padding(14).frame(width: 372)
+        .background(AmbientBackground(strength: 0.8))
         .environment(\.inPopover, true)
     }
 
@@ -252,7 +253,7 @@ struct MenuBarView: View {
             tabButton("general", "Général", "square.grid.2x2")
             ForEach(tabs) { p in tabButton(p.id, p.name.replacingOccurrences(of: " CLI", with: "").replacingOccurrences(of: " Code", with: ""), p.symbol) }
         }
-        .padding(3).background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(3).card(radius: 14)
     }
 
     func tabButton(_ id: String, _ title: String, _ icon: String) -> some View {
@@ -262,7 +263,7 @@ struct MenuBarView: View {
                 if id == "general" || pop.tab == id { Text(title).font(.caption).lineLimit(1) }
             }
             .help(title).frame(maxWidth: .infinity).padding(.vertical, 6)
-                .background(pop.tab == id ? Color.primary.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 8))
+                .background(pop.tab == id ? Color.orange.opacity(0.28) : .clear, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
         }.buttonStyle(.plain)
     }
 
@@ -425,7 +426,7 @@ struct DashboardView: View {
                 }
                 .frame(maxWidth: 1000).padding(pagePadding).frame(maxWidth: .infinity)
             }
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(AmbientBackground())
             .navigationTitle(title)
             .toolbar {
                 ToolbarItemGroup {

@@ -18,14 +18,15 @@ extension EnvironmentValues {
 
 struct CardStyle: ViewModifier {
     var radius: CGFloat = 12
+    var tint: Color? = nil
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         if #available(macOS 26, *) {
-            // Liquid Glass surface.
-            content.glassEffect(.regular, in: shape)
+            // Liquid Glass surface, lightly tinted so it refracts the ambient backdrop.
+            content.glassEffect(tint.map { .regular.tint($0.opacity(0.16)) } ?? .regular, in: shape)
         } else {
             content
-                .background(Color.primary.opacity(0.06), in: shape)
+                .background((tint ?? .primary).opacity(tint == nil ? 0.06 : 0.1), in: shape)
                 .background(.thinMaterial, in: shape)
                 .overlay(shape.strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
         }
@@ -36,8 +37,34 @@ extension View {
     @ViewBuilder func emberProminent() -> some View {
         if #available(macOS 26, *) { buttonStyle(.glassProminent) } else { buttonStyle(.borderedProminent) }
     }
+    @ViewBuilder func emberGlass() -> some View {
+        if #available(macOS 26, *) { buttonStyle(.glass) } else { buttonStyle(.bordered) }
+    }
+    func card(radius: CGFloat = 12, tint: Color? = nil) -> some View { modifier(CardStyle(radius: radius, tint: tint)) }
+
+    /// Groups nearby glass surfaces so they blend and render in one pass.
+    @ViewBuilder func glassGroup(spacing: CGFloat = 12) -> some View {
+        if #available(macOS 26, *) { GlassEffectContainer(spacing: spacing) { self } } else { self }
+    }
 }
-extension View { func card(radius: CGFloat = 12) -> some View { modifier(CardStyle(radius: radius)) } }
+
+/// Soft ember-coloured light behind the content: glass needs something to refract.
+struct AmbientBackground: View {
+    var strength: Double = 1
+    var body: some View {
+        ZStack {
+            Color(nsColor: .windowBackgroundColor)
+            GeometryReader { g in
+                let w = g.size.width, h = g.size.height
+                Circle().fill(Color.orange.opacity(0.42 * strength)).frame(width: w * 0.8).offset(x: -w * 0.3, y: -h * 0.25)
+                Circle().fill(Color.pink.opacity(0.28 * strength)).frame(width: w * 0.7).offset(x: w * 0.5, y: h * 0.05)
+                Circle().fill(Color.indigo.opacity(0.30 * strength)).frame(width: w * 0.8).offset(x: w * 0.05, y: h * 0.7)
+            }
+            .blur(radius: 70)
+        }
+        .clipped().ignoresSafeArea()
+    }
+}
 
 let pagePadding: CGFloat = 24
 let gridSpacing: CGFloat = 16

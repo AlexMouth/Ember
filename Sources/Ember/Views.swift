@@ -48,7 +48,7 @@ struct SourcesView: View {
                     .padding(12).frame(maxWidth: .infinity, alignment: .leading).card(radius: 12)
                 }
         }.padding(20)
-        return SnapshotMode.on ? AnyView(list) : AnyView(ScrollView { list })
+        return (SnapshotMode.on ? AnyView(list) : AnyView(ScrollView { list })).background(AmbientBackground(strength: 0.7))
     }
 }
 
@@ -86,7 +86,8 @@ struct SettingsPane<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View {
         let body = VStack(alignment: .leading, spacing: 18) { content }.padding(20)
-        if SnapshotMode.on { body } else { ScrollView { body } }
+        Group { if SnapshotMode.on { body } else { ScrollView { body } } }
+            .background(AmbientBackground(strength: 0.7))
     }
 }
 
