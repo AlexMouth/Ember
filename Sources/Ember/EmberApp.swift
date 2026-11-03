@@ -91,6 +91,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationWillTerminate(_ notification: Notification) { store.flush() }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         let it = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         it.button?.target = self
@@ -127,6 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let b = item?.button else { return }
         if popover.isShown { popover.performClose(nil); return }
         popover.show(relativeTo: b.bounds, of: b, preferredEdge: .minY)
+        if Date().timeIntervalSince(store.lastRefresh ?? .distantPast) > 60 { store.refresh() }
         popover.contentViewController?.view.window?.makeKey()
     }
 

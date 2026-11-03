@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 VERSION=${VERSION:-0.1.0}
 ARCHS=(${=ARCHS:-})   # e.g. ARCHS="arm64 x86_64" for a universal build
-FLAGS=(-c release)
+FLAGS=(-c release -Xswiftc -Osize -Xlinker -dead_strip)
 for a in $ARCHS; do FLAGS+=(--arch $a); done
 swift build $FLAGS
 BIN=$(swift build $FLAGS --show-bin-path)
@@ -13,6 +13,7 @@ APP=$BUILD_DIR/Ember.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/Ember" "$APP/Contents/MacOS/Ember"
+strip -x "$APP/Contents/MacOS/Ember"
 cp assets/Ember.icns "$APP/Contents/Resources/Ember.icns"
 cp -R "$BIN/Ember_Ember.bundle" "$APP/Contents/Resources/" 2>/dev/null || true
 cat > "$APP/Contents/Info.plist" <<'PLIST'

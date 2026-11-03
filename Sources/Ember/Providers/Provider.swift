@@ -86,10 +86,13 @@ func files(under dir: String, ext: String) -> [String] {
 }
 
 func readLines(_ path: String, _ body: (Substring) -> Void) {
-    guard let data = FileManager.default.contents(atPath: path),
-        let text = String(data: data, encoding: .utf8)
-    else { return }
-    text.split(separator: "\n", omittingEmptySubsequences: true).forEach(body)
+    guard let data = try? Data(contentsOf: URL(fileURLWithPath: path), options: .mappedIfSafe) else { return }
+    var start = data.startIndex
+    while start < data.endIndex {
+        let end = data[start...].firstIndex(of: 0x0A) ?? data.endIndex
+        if end > start { body(Substring(String(decoding: data[start..<end], as: UTF8.self))) }
+        start = end < data.endIndex ? data.index(after: end) : end
+    }
 }
 
 func json(_ line: Substring) -> [String: Any]? {

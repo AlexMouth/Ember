@@ -23,7 +23,7 @@ final class Store: ObservableObject {
 
     @AppStorage("monthlyBudget") var monthlyBudget: Double = 0
     @AppStorage("liveClaude") var liveClaude = true
-    @AppStorage("refreshMinutes") var refreshMinutes = 2
+    @AppStorage("refreshMinutes") var refreshMinutes = 5
     @AppStorage("lastAlertLevel") private var lastAlertLevel = ""
     @AppStorage("menuMode") var menuMode = "auto"          // auto | quota | cost | icon
     @AppStorage("menuProvider") var menuProvider = "claude"
@@ -34,7 +34,11 @@ final class Store: ObservableObject {
     private let cache = FileCache()
     private var timer: Timer?
     private var lastLive = Date.distantPast
-    private var index: [String: QuotaSample] = [:]
+    private var index: [String: QuotaSample] = [:] { didSet { seriesDirty = true } }
+    private var seriesDirty = true
+    private var seriesCache: [String: [QuotaSample]] = [:]
+    private var lastSave = Date.distantPast
+    private var unsaved = false
     private var claudeCosts: [(ts: Double, cost: Double)] = []
 
     init() {
@@ -57,6 +61,7 @@ final class Store: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: Double(max(1, refreshMinutes)) * 60, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
+        timer?.tolerance = Double(max(1, refreshMinutes)) * 12  // 20 %: lets macOS coalesce wake-ups
     }
 
     // MARK: refresh
@@ -134,8 +139,8 @@ final class Store: ObservableObject {
         if changed {
             let cutoff = Date().timeIntervalSince1970 - 35 * 86400
             index = index.filter { $0.value.t >= cutoff }
-            let all = Array(index.values)
-            Task.detached(priority: .utility) { QuotaDisk.save(all) }
+            unsaved = true
+            if Date().timeIntervalSince(lastSave) > 600 { flush() }
         }
         rebuildQuotas()
     }
@@ -154,9 +159,21 @@ final class Store: ObservableObject {
         }.sorted { ($0.provider, $0.windowMinutes) < ($1.provider, $1.windowMinutes) }
     }
 
+    /// Writes the quota history, at most every 10 min (and on quit) instead of on every new sample.
+    func flush() {
+        guard unsaved else { return }
+        unsaved = false; lastSave = Date()
+        let all = Array(index.values)
+        Task.detached(priority: .utility) { QuotaDisk.save(all) }
+    }
+
     func info(_ q: QuotaWindow) -> QuotaInfo {
+        if seriesDirty {
+            seriesCache = Dictionary(grouping: index.values) { $0.provider + "|" + $0.label }
+            seriesDirty = false
+        }
         let r = q.resetsAt?.timeIntervalSince1970 ?? 0
-        let s = index.values.filter { $0.provider == q.provider && $0.label == q.label && abs($0.resets - r) < 600 }
+        let s = (seriesCache[q.provider + "|" + q.label] ?? []).filter { abs($0.resets - r) < 600 }
         return QuotaInfo(q: q, samples: s)
     }
 

@@ -194,7 +194,7 @@ struct GeminiCLI: UsageProvider {
     }
 
     private func parse(_ path: String) -> [Entry] {
-        guard let data = FileManager.default.contents(atPath: path),
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path), options: .mappedIfSafe),
             let d = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let msgs = d["messages"] as? [[String: Any]]
         else { return [] }

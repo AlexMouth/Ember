@@ -56,14 +56,19 @@ struct AmbientBackground: View {
             Color(nsColor: .windowBackgroundColor)
             GeometryReader { g in
                 let w = g.size.width, h = g.size.height
-                Circle().fill(Color.orange.opacity(0.42 * strength)).frame(width: w * 0.8).offset(x: -w * 0.3, y: -h * 0.25)
-                Circle().fill(Color.pink.opacity(0.28 * strength)).frame(width: w * 0.7).offset(x: w * 0.5, y: h * 0.05)
-                Circle().fill(Color.indigo.opacity(0.30 * strength)).frame(width: w * 0.8).offset(x: w * 0.05, y: h * 0.7)
+                blob(.orange, 0.42 * strength, w * 0.8, x: -w * 0.3, y: -h * 0.25)
+                blob(.pink, 0.28 * strength, w * 0.7, x: w * 0.5, y: h * 0.05)
+                blob(.indigo, 0.30 * strength, w * 0.8, x: w * 0.05, y: h * 0.7)
             }
-            .blur(radius: 70)
         }
         .clipped().ignoresSafeArea()
     }
+}
+
+/// A soft colour blob. A radial gradient is far cheaper to composite than a blurred circle.
+private func blob(_ c: Color, _ o: Double, _ d: CGFloat, x: CGFloat, y: CGFloat) -> some View {
+    Circle().fill(RadialGradient(colors: [c.opacity(o), c.opacity(0)], center: .center, startRadius: 0, endRadius: d * 0.75))
+        .frame(width: d * 1.5).offset(x: x - d * 0.25, y: y - d * 0.25)
 }
 
 let pagePadding: CGFloat = 24
