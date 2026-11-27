@@ -192,6 +192,14 @@ final class Store: ObservableObject {
 
     // MARK: queries
 
+    /// Re-reads the price files and recomputes every cost.
+    func reloadPrices() {
+        Pricing.shared.reload()
+        costCache.removeAll()
+        objectWillChange.send()
+        refresh()  // hourly buckets and the live session carry costs computed at scan time
+    }
+
     func cost(_ r: UsageRecord) -> Double {
         if let c = costCache[r.id] { return c }
         let c = Pricing.shared.cost(r)

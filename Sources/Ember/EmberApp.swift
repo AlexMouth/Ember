@@ -165,7 +165,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             w.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
             w.titlebarAppearsTransparent = true
             w.titleVisibility = .hidden
-            w.setContentSize(NSSize(width: 740, height: 540))
+            w.setContentSize(NSSize(width: 880, height: 640))
+            w.contentMinSize = NSSize(width: 780, height: 540)
             w.isReleasedWhenClosed = false
             w.center()
             settings = w

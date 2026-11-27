@@ -18,7 +18,8 @@ Application macOS de barre des menus (SwiftUI) qui suit, **en local**, la consom
 - **Session en cours** (Claude Code) : projet, durée, coût, tokens et modèle de la conversation active, dans le popover.
 - **Répartition par modèle et par projet** dans l'aperçu du tableau de bord (top 8, toutes sources confondues).
 - **Popover** dans la barre des menus : une carte par quota (gros pourcentage restant + barres 5 h / hebdo), session en cours, dépense du jour et des 30 jours, top des sources. Si le jeton Claude Code a expiré, la carte l'indique (« Estimation ») et un clic lance `claude`, ce qui suffit à le renouveler ; `claude /login` n'est proposé que si le compte est vraiment déconnecté.
-- **Réglages** façon Réglages Système : barre latérale (Général, Barre des menus, Notifications, Compte Claude, Données, Sources, À propos) avec aperçu en direct de l'icône de la barre des menus et état du jeton Claude (date d'expiration).
+- **Réglages** façon Réglages Système : barre latérale (Général, Barre des menus, Notifications, Compte Claude, Données et prix, Sources, À propos) avec aperçu en direct de l'icône de la barre des menus et état du jeton Claude (date d'expiration).
+- **Données et prix** : tableau des modèles réellement utilisés (30 jours ou tout l'historique) avec le prix appliqué (entrée, sortie, cache lu, cache écrit, en $ par million de tokens), le coût, et l'origine de chaque prix (models.dev, intégré, personnalisé, approché par famille ou sans prix).
 - **Mise à jour intégrée** depuis les Releases GitHub, avec progression du téléchargement.
 - **Alertes** : budget mensuel (80 % / 100 %), seuil de quota restant au choix et notification quand une limite est atteinte (100 %), via notifications macOS.
 - **Export CSV**, prix des modèles modifiables (`pricing-overrides.json`), lancement à l'ouverture de session.
@@ -93,7 +94,8 @@ Options de débogage : `Ember --dump` (affiche les données lues) et `Ember --sn
 
 - `Sources/Ember/Resources/pricing.json` : table générée depuis models.dev (USD / million de tokens).
 - `Sources/Ember/Resources/pricing-fallbacks.json` : prix intégrés pour les modèles absents de la table, et rapprochement par famille (`sonnet`, `opus`, `gpt-5`…) pour les nouvelles versions. Un prix obtenu par famille est signalé comme approché dans les Réglages.
-- `~/Library/Application Support/Ember/pricing-overrides.json` : tes corrections, prioritaires sur tout le reste. Format : `{"nom-du-modele": [entrée, sortie, lecture cache, écriture cache]}` en USD par million de tokens (nom insensible à la casse).
+- `~/Library/Application Support/Ember/pricing-overrides.json` : tes corrections, prioritaires sur tout le reste. Format : `{"nom-du-modele": [entrée, sortie, lecture cache, écriture cache]}` en USD par million de tokens (nom insensible à la casse). Réglages › Données et prix › « Ouvrir… » crée le fichier avec un exemple, et « Recharger » applique les changements sans relancer l'app.
+- Ordre de priorité : personnalisé > models.dev > intégré > famille (≈). Un modèle introuvable partout est compté 0 $ et signalé en rouge dans Réglages › Données et prix.
 
 ## Structure
 
