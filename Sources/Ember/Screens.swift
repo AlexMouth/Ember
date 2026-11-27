@@ -236,10 +236,10 @@ struct MenuBarView: View {
                 }
                 Spacer()
                 Button { store.refresh() } label: { Image(systemName: "arrow.clockwise") }
-                    .help("Actualiser").disabled(store.refreshing)
-                Button { openSettings() } label: { Image(systemName: "gearshape") }.help("Réglages")
+                    .help("Actualiser").accessibilityLabel("Actualiser").disabled(store.refreshing)
+                Button { openSettings() } label: { Image(systemName: "gearshape") }.help("Réglages").accessibilityLabel("Réglages")
                 Button { NSApplication.shared.terminate(nil) } label: { Image(systemName: "power") }
-                    .help("Quitter Ember").keyboardShortcut("q")
+                    .help("Quitter Ember").accessibilityLabel("Quitter Ember").keyboardShortcut("q")
             }
             .emberGlass().controlSize(.small).foregroundStyle(.secondary)
         }
@@ -265,6 +265,8 @@ struct MenuBarView: View {
             .help(title).frame(maxWidth: .infinity).padding(.vertical, 6)
                 .background(pop.tab == id ? Color.orange.opacity(0.28) : .clear, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
         }.buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(pop.tab == id ? .isSelected : [])
     }
 
     var general: some View {
@@ -292,6 +294,9 @@ struct MenuBarView: View {
                             }
                             .padding(12).frame(maxWidth: .infinity, alignment: .leading)
                             .card(radius: 10)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("Quota \(store.providerName(pid))")
+                            .accessibilityValue(String(format: "%.0f %% restants", 100 - q.usedPercent))
                         }
                     }
                 }
@@ -300,7 +305,7 @@ struct MenuBarView: View {
             if !others.isEmpty {
                 Text("Autres IA détectées").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 2)
                 HStack(spacing: 8) {
-                    ForEach(others.prefix(7)) { p in ProviderIcon(id: p.id, symbol: p.symbol, size: 20).help(p.name) }
+                    ForEach(others.prefix(7)) { p in ProviderIcon(id: p.id, symbol: p.symbol, size: 20).help(p.name).accessibilityLabel(p.name) }
                     if others.count > 7 { Text("+\(others.count - 7)").font(.caption.weight(.medium)).foregroundStyle(.secondary) }
                     Spacer()
                     Text("\(others.count) sans données").font(.caption).foregroundStyle(.tertiary)
@@ -319,6 +324,9 @@ struct MenuBarView: View {
                     }
                     shareBar(c / maxCost, color(for: p.id))
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(p.name)
+                .accessibilityValue("\(money(c)), \(compact(t)) tokens")
             }
         }
     }
@@ -431,11 +439,11 @@ struct DashboardView: View {
             .toolbar {
                 ToolbarItemGroup {
                     Picker("Période", selection: $ui.range) { ForEach(Range.allCases) { Text($0.rawValue).tag($0) } }.pickerStyle(.menu)
-                    Button { store.refresh() } label: { Image(systemName: "arrow.clockwise") }.help("Actualiser").disabled(store.refreshing)
+                    Button { store.refresh() } label: { Image(systemName: "arrow.clockwise") }.help("Actualiser").accessibilityLabel("Actualiser").disabled(store.refreshing)
                     Button { if let u = store.exportCSV() { NSWorkspace.shared.activateFileViewerSelecting([u]) } } label: {
                         Image(systemName: "square.and.arrow.up")
-                    }.help("Exporter en CSV")
-                    SettingsLink { Image(systemName: "gearshape") }
+                    }.help("Exporter en CSV").accessibilityLabel("Exporter en CSV")
+                    Button { AppDelegate.current?.showSettings() } label: { Image(systemName: "gearshape") }.help("Réglages").accessibilityLabel("Réglages")
                 }
             }
         }
@@ -579,8 +587,7 @@ struct ProviderPage: View {
         let qs = store.quotas(for: id)
         let infos = qs.map { store.info($0) }
         let cost = store.totalCost(data), tok = store.totalTokens(data)
-        let models = Dictionary(grouping: data, by: { $0.model }).map { ($0.key, $0.value) }
-            .sorted { (store.totalCost($0.1), store.totalTokens($0.1)) > (store.totalCost($1.1), store.totalTokens($1.1)) }
+        let models = store.breakdown(data, by: \.model)
         return VStack(alignment: .leading, spacing: gridSpacing) {
             if infos.isEmpty {
                 if id == "claude" || id == "codex" { QuotaMissing(provider: id) }
@@ -605,14 +612,14 @@ struct ProviderPage: View {
             SpendChart(data: data, ui: ui, stacked: false)
             Section_(title: "Modèles", trailing: "\(models.count)") {
                 AnyView(VStack(spacing: 8) {
-                    ForEach(models, id: \.0) { m, rs in
-                        let c = store.totalCost(rs)
+                    ForEach(models, id: \.name) { row in
+                        let c = row.cost
                         VStack(spacing: 3) {
                             HStack {
-                                Text(m).lineLimit(1)
-                                if Pricing.shared.isApproximate(m) { Text("≈").foregroundStyle(.orange).help("Prix approché") }
+                                Text(row.name).lineLimit(1)
+                                if Pricing.shared.isApproximate(row.name) { Text("≈").foregroundStyle(.orange).help("Prix approché") }
                                 Spacer()
-                                Text(compact(store.totalTokens(rs))).font(.callout.monospacedDigit()).foregroundStyle(.secondary)
+                                Text(compact(row.tokens)).font(.callout.monospacedDigit()).foregroundStyle(.secondary)
                                 Text(money(c)).font(.callout.monospacedDigit()).frame(width: 70, alignment: .trailing)
                             }
                             shareBar(cost > 0 ? c / cost : 0, color(for: id))
@@ -621,16 +628,15 @@ struct ProviderPage: View {
                 })
             }
             TokenBreakdown(data: data)
-            let projects = Dictionary(grouping: data, by: { $0.project }).map { ($0.key, $0.value) }
-                .sorted { store.totalCost($0.1) > store.totalCost($1.1) }.prefix(12)
+            let projects = store.breakdown(data, by: \.project).prefix(12)
             Section_(title: "Projets", trailing: "top \(projects.count)") {
                 AnyView(VStack(spacing: 8) {
-                    ForEach(Array(projects), id: \.0) { p, rs in
+                    ForEach(Array(projects), id: \.name) { row in
                         HStack {
-                            Text(p.isEmpty ? "—" : p).lineLimit(1)
+                            Text(row.name.isEmpty ? "—" : row.name).lineLimit(1)
                             Spacer()
-                            Text(compact(store.totalTokens(rs))).font(.callout.monospacedDigit()).foregroundStyle(.secondary)
-                            Text(money(store.totalCost(rs))).font(.callout.monospacedDigit()).frame(width: 70, alignment: .trailing)
+                            Text(compact(row.tokens)).font(.callout.monospacedDigit()).foregroundStyle(.secondary)
+                            Text(money(row.cost)).font(.callout.monospacedDigit()).frame(width: 70, alignment: .trailing)
                         }
                     }
                 })
@@ -648,8 +654,7 @@ struct BreakdownCard: View {
     var tint: Color = .orange
 
     var body: some View {
-        let rows = Dictionary(grouping: data, by: { $0[keyPath: key] }).map { (name: $0.key, cost: store.totalCost($0.value), tokens: store.totalTokens($0.value)) }
-            .sorted { $0.cost > $1.cost }
+        let rows = store.breakdown(data, by: key)
         let top = Array(rows.prefix(8))
         let maxCost = max(top.first?.cost ?? 1, 0.0001)
         return Section_(title: title, trailing: "top \(top.count) sur \(rows.count)") {

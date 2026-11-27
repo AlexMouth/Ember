@@ -1,7 +1,7 @@
 import Foundation
 
 /// One observation of a quota window (percent used) at a point in time.
-struct QuotaSample: Codable, Hashable {
+struct QuotaSample: Codable, Hashable, Sendable {
     var provider: String
     var label: String  // "5 h", "7 j", "30 j"
     var t: Double  // unix seconds

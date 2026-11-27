@@ -19,9 +19,18 @@ extension EnvironmentValues {
 struct CardStyle: ViewModifier {
     var radius: CGFloat = 12
     var tint: Color? = nil
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-        if #available(macOS 26, *) {
+        if reduceTransparency || contrast == .increased {
+            // Solid surface with a defined border: no glass, nothing shows through.
+            content
+                .background((tint ?? .clear).opacity(0.12), in: shape)
+                .background(Color(nsColor: .controlBackgroundColor), in: shape)
+                .overlay(shape.strokeBorder(Color.primary.opacity(contrast == .increased ? 0.45 : 0.15), lineWidth: contrast == .increased ? 1 : 0.5))
+        } else if #available(macOS 26, *) {
             // Liquid Glass surface, lightly tinted so it refracts the ambient backdrop.
             content.glassEffect(tint.map { .regular.tint($0.opacity(0.16)) } ?? .regular, in: shape)
         } else {
@@ -51,15 +60,17 @@ extension View {
 /// Soft ember-coloured light behind the content: glass needs something to refract.
 struct AmbientBackground: View {
     var strength: Double = 1
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
     var body: some View {
         ZStack {
             Color(nsColor: .windowBackgroundColor)
-            GeometryReader { g in
+            if !reduceTransparency && contrast != .increased { GeometryReader { g in
                 let w = g.size.width, h = g.size.height
                 blob(.orange, 0.42 * strength, w * 0.8, x: -w * 0.3, y: -h * 0.25)
                 blob(.pink, 0.28 * strength, w * 0.7, x: w * 0.5, y: h * 0.05)
                 blob(.indigo, 0.30 * strength, w * 0.8, x: w * 0.05, y: h * 0.7)
-            }
+            } }
         }
         .clipped().ignoresSafeArea()
     }
@@ -123,6 +134,8 @@ struct Badge: View {
         }
         .padding(.horizontal, 8).padding(.vertical, 3)
         .background((good ? Color.green : Color.red).opacity(0.14), in: Capsule())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(text)
     }
 }
 
@@ -222,6 +235,18 @@ struct QuotaChart: View {
             }
         }
         .frame(height: height)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Évolution du quota restant")
+        .accessibilityValue(accessibilitySummary)
+    }
+
+    /// What the chart shows, in one sentence, for VoiceOver.
+    var accessibilitySummary: String {
+        var s = String(format: "%.0f %% restants, %.0f %% attendus à ce stade", info.remaining, info.pace(at: info.now))
+        if let p = info.projected {
+            s += p >= 0 ? String(format: ". Projection : %.0f %% au reset", p) : ". Projection : limite atteinte avant le reset"
+        }
+        return s
     }
 }
 
@@ -247,6 +272,7 @@ struct QuotaPanel: View {
                 Spacer()
                 Badge(text: aheadText(info), good: info.ahead >= 0)
             }
+            .accessibilityElement(children: .combine)
             QuotaChart(info: info, height: height)
             let p = info.projected
             Text(p.map { $0 >= 0 ? String(format: "Au rythme actuel : ≈ %.0f %% restants au reset", $0)

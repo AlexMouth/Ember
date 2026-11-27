@@ -7,7 +7,7 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "Ember",
-            resources: [.copy("Resources/pricing.json")],
+            resources: [.copy("Resources/pricing.json"), .copy("Resources/pricing-fallbacks.json")],
             swiftSettings: []
         ),
         .testTarget(name: "EmberTests", dependencies: ["Ember"])

@@ -51,6 +51,8 @@ enum Day {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
         f.locale = Locale(identifier: "en_US_POSIX")
+        f.calendar = Calendar(identifier: .gregorian)
+        f.timeZone = .autoupdatingCurrent  // follows a time-zone change without relaunching
         return f
     }()
     static func string(_ d: Date) -> String { fmt.string(from: d) }

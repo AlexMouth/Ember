@@ -12,8 +12,10 @@ struct ClaudeCode: UsageProvider {
     func scan(cache: FileCache) -> ScanOutput {
         var out = ScanOutput()
         var seen = Set<String>()
-        let all = files(under: "~/.claude/projects", ext: ".jsonl") + files(under: "~/.config/claude/projects", ext: ".jsonl")
-        cache.prune(keeping: Set(all), prefix: home + "/.claude/projects")
+        let roots = ["~/.claude/projects", "~/.config/claude/projects"]
+        let all = roots.flatMap { files(under: $0, ext: ".jsonl") }
+        let keep = Set(all)
+        for r in roots { cache.prune(keeping: keep, prefix: expand(r)) }
         for f in all {
             let es = cache.entries(for: f) { parse(f) }
             for e in es where seen.insert(e.key).inserted { out.entries.append(e) }
@@ -22,8 +24,14 @@ struct ClaudeCode: UsageProvider {
     }
 
     func parse(_ path: String) -> [Entry] {
+        var lines: [Substring] = []
+        readLines(path) { lines.append($0) }
+        return Self.parse(lines: lines)
+    }
+
+    static func parse<S: Sequence>(lines: S) -> [Entry] where S.Element == Substring {
         var best: [String: Entry] = [:]
-        readLines(path) { line in
+        for line in lines {
             // Cheap pre-filter: only assistant lines carry usage.
             guard line.contains("\"usage\"") , let d = json(line),
                 d["type"] as? String == "assistant",
@@ -31,7 +39,7 @@ struct ClaudeCode: UsageProvider {
                 let u = msg["usage"] as? [String: Any],
                 let model = msg["model"] as? String, model != "<synthetic>",
                 let tsText = d["timestamp"] as? String, let ts = Day.parse(tsText)
-            else { return }
+            else { continue }
             let key = (msg["id"] as? String ?? "") + "|" + (d["requestId"] as? String ?? d["uuid"] as? String ?? "")
             let e = Entry(
                 key: key, ts: ts.timeIntervalSince1970, model: model,
@@ -40,7 +48,7 @@ struct ClaudeCode: UsageProvider {
                 cacheRead: int(u["cache_read_input_tokens"]), cacheWrite: int(u["cache_creation_input_tokens"]),
                 session: d["sessionId"] as? String)
             // Streaming writes the same message several times; the last has final counts.
-            if let old = best[key], old.output > e.output { return }
+            if let old = best[key], old.output > e.output { continue }
             best[key] = e
         }
         return Array(best.values)
@@ -63,6 +71,7 @@ struct Codex: UsageProvider {
     func scan(cache: FileCache) -> ScanOutput {
         var out = ScanOutput()
         let rollouts = files(under: "~/.codex/sessions", ext: ".jsonl.zst") + files(under: "~/.codex/sessions", ext: ".jsonl")
+        cache.prune(keeping: Set(rollouts), prefix: expand("~/.codex/sessions"))
         var covered = Set<String>()
         var latestQuota: (Double, [QuotaWindow])?
         for f in rollouts {
@@ -118,29 +127,33 @@ struct Codex: UsageProvider {
         }
     }
 
-    private func readRollout(_ path: String) -> String? {
+    /// Feeds each line of a rollout to `body`; .zst files are decompressed as a stream.
+    private func eachRolloutLine(_ path: String, _ body: (Substring) -> Void) -> Bool {
         if path.hasSuffix(".zst") {
-            guard let z = Codex.zstd else { return nil }
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: z)
-            p.arguments = ["-dc", path]
-            let pipe = Pipe()
-            p.standardOutput = pipe
-            p.standardError = FileHandle.nullDevice
-            do { try p.run() } catch { return nil }
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            p.waitUntilExit()
-            return String(data: data, encoding: .utf8)
+            guard let z = Codex.zstd else { return false }
+            return streamLines(z, ["-dc", path], body)
         }
-        return (try? String(contentsOfFile: path, encoding: .utf8))
+        guard FileManager.default.isReadableFile(atPath: path) else { return false }
+        readLines(path, body)
+        return true
     }
 
     private func parse(_ path: String) -> [Entry] {
-        guard let text = readRollout(path) else { return [] }
+        var lines: [Substring] = []
+        // Only lines that can matter are kept, so memory stays small even for long sessions.
+        guard eachRolloutLine(path, { line in
+            if line.contains("\"token_count\"") || line.contains("\"session_meta\"") || line.contains("\"turn_context\"") {
+                lines.append(line)
+            }
+        }) else { return [] }
+        return Codex.parse(lines: lines, path: path)
+    }
+
+    static func parse<S: Sequence>(lines: S, path: String) -> [Entry] where S.Element == Substring {
         var cwd = "", model = "gpt-5", lastTs = 0.0
         var usage: [String: Any]?
         var quota: String?
-        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+        for line in lines {
             let isTok = line.contains("\"token_count\"")
             let isMeta = line.contains("\"session_meta\"") || line.contains("\"turn_context\"")
             guard isTok || isMeta, let d = json(line) else { continue }
@@ -153,7 +166,7 @@ struct Codex: UsageProvider {
                 if let rl = p["rate_limits"] as? [String: Any] {
                     var w: [(String, Double, Double?)] = []
                     for k in ["primary", "secondary"] {
-                        if let x = rl[k] as? [String: Any], let used = x["used_percent"] as? Double {
+                        if let x = rl[k] as? [String: Any], let used = (x["used_percent"] as? Double) ?? (x["used_percent"] as? Int).map(Double.init) {
                             let mins = int(x["window_minutes"])
                             let label = mins >= 1440 ? "\(mins / 1440) j" : "\(mins / 60) h"
                             w.append((label, used, (x["resets_at"] as? Double)))
@@ -187,25 +200,34 @@ struct GeminiCLI: UsageProvider {
 
     func scan(cache: FileCache) -> ScanOutput {
         var out = ScanOutput()
-        for f in files(under: "~/.gemini/tmp", ext: ".json") where f.contains("/chats/") {
+        let chats = files(under: "~/.gemini/tmp", ext: ".json").filter { $0.contains("/chats/") }
+        cache.prune(keeping: Set(chats), prefix: expand("~/.gemini/tmp"))
+        for f in chats {
             out.entries += cache.entries(for: f) { parse(f) }
         }
         return out
     }
 
     private func parse(_ path: String) -> [Entry] {
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path), options: .mappedIfSafe),
-            let d = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path), options: .mappedIfSafe) else { return [] }
+        return Self.parse(data: data, path: path)
+    }
+
+    static func parse(data: Data, path: String) -> [Entry] {
+        guard let d = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let msgs = d["messages"] as? [[String: Any]]
         else { return [] }
         let proj = path.components(separatedBy: "/tmp/").last?.components(separatedBy: "/").first ?? ""
-        return msgs.compactMap { m in
+        let session = d["sessionId"] as? String ?? (path as NSString).lastPathComponent
+        return msgs.enumerated().compactMap { i, m in
             guard m["type"] as? String == "gemini", let t = m["tokens"] as? [String: Any],
-                let ts = (m["timestamp"] as? String).flatMap(Day.parse)
+                let tsText = m["timestamp"] as? String, let ts = Day.parse(tsText)
             else { return nil }
             let cached = int(t["cached"])
+            // Stable across rescans even when a message has no id (a random key would double-count).
+            let id = (m["id"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "\(session)#\(i)@\(tsText)"
             return Entry(
-                key: "gemini|" + (m["id"] as? String ?? UUID().uuidString), ts: ts.timeIntervalSince1970,
+                key: "gemini|" + id, ts: ts.timeIntervalSince1970,
                 model: m["model"] as? String ?? "gemini", project: proj.count > 20 ? "gemini" : proj,
                 input: max(0, int(t["input"]) - cached), output: int(t["output"]) + int(t["thoughts"]) + int(t["tool"]),
                 cacheRead: cached, cacheWrite: 0)
@@ -229,13 +251,28 @@ struct KiroCLI: UsageProvider {
         let db = expand("~/Library/Application Support/kiro-cli/data.sqlite3")
         SQL.query(db, "select key, conversation_id, value, updated_at from conversations_v2") { st in
             let key = SQL.text(st, 0), cid = SQL.text(st, 1), value = SQL.text(st, 2)
-            let turns = value.components(separatedBy: "\"user\":{").count - 1
-            guard turns > 0 else { return }
+            guard KiroCLI.turns(value) > 0 else { return }
             out.entries.append(Entry(
                 key: "kiro|" + cid, ts: Double(SQL.int(st, 3)) / 1000, model: "kiro", project: shortProject(key),
                 input: 0, output: 0, cacheRead: 0, cacheWrite: 0, estimated: true))
         }
         return out
+    }
+}
+
+extension KiroCLI {
+    /// Number of user turns in a stored conversation. Parses the JSON (`history` is a list of
+    /// `{user, assistant, …}` objects); falls back to a text count if the format changes.
+    static func turns(_ value: String) -> Int {
+        if let d = (try? JSONSerialization.jsonObject(with: Data(value.utf8))) as? [String: Any],
+           let h = d["history"] as? [Any] {
+            return h.reduce(0) { n, item in
+                if let o = item as? [String: Any], o["user"] != nil { return n + 1 }
+                if let pair = item as? [Any], pair.contains(where: { ($0 as? [String: Any])?["content"] != nil }) { return n + 1 }
+                return n
+            }
+        }
+        return max(0, value.components(separatedBy: "\"user\":{").count - 1)
     }
 }
 

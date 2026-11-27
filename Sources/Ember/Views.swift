@@ -141,6 +141,10 @@ struct SettingsView: View {
                         ForEach(quotaProviders) { p in Text(p.name).tag(p.id) }
                     }
                 }
+                Toggle("Colorer la flamme selon le quota", isOn: store.$menuTint)
+                Toggle("Mini-jauge du quota restant", isOn: store.$menuGauge)
+                Text("Vert tant que le quota va bien, orange dès 80 % utilisés, rouge dès 95 %.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             SCard(title: "Actualisation") {
                 Stepper("Toutes les \(store.refreshMinutes) min", value: store.$refreshMinutes, in: 1...30)

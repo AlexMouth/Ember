@@ -2,7 +2,7 @@ import Foundation
 import SQLite3
 
 /// A single usage event, before aggregation.
-struct Entry: Codable, Hashable {
+struct Entry: Codable, Hashable, Sendable {
     var key: String  // dedupe key
     var ts: Double  // unix seconds
     var model: String
@@ -16,7 +16,7 @@ struct Entry: Codable, Hashable {
 }
 
 /// A quota window read from a local file or a live endpoint.
-struct QuotaWindow: Codable, Hashable, Identifiable {
+struct QuotaWindow: Codable, Hashable, Identifiable, Sendable {
     var provider: String
     var label: String  // "5 h", "7 j"
     var usedPercent: Double
@@ -25,13 +25,13 @@ struct QuotaWindow: Codable, Hashable, Identifiable {
     var id: String { provider + label }
 }
 
-struct ScanOutput {
+struct ScanOutput: Sendable {
     var entries: [Entry] = []
     var quotas: [QuotaWindow] = []
     var quotaSamples: [QuotaSample] = []
 }
 
-protocol UsageProvider {
+protocol UsageProvider: Sendable {
     var id: String { get }
     var name: String { get }
     var symbol: String { get }
@@ -41,37 +41,57 @@ protocol UsageProvider {
 }
 
 /// Per-file parse cache keyed by path + mtime + size, so rescans only touch changed files.
-final class FileCache {
-    private var store: [String: CachedFile] = [:]
-    private let url = URL(fileURLWithPath: Paths.support + "/scan-cache.json")
+/// Thread-safe: providers scan concurrently and share one instance.
+final class FileCache: @unchecked Sendable {
     struct CachedFile: Codable { var sig: String; var entries: [Entry] }
+    private var store: [String: CachedFile] = [:]
+    private var dirty = false
+    private let url: URL
     private let lock = NSLock()
 
-    init() {
+    init(url: URL = URL(fileURLWithPath: Paths.support + "/scan-cache.json")) {
+        self.url = url
         if let d = try? Data(contentsOf: url), let s = try? JSONDecoder().decode([String: CachedFile].self, from: d) {
             store = s
         }
     }
 
-    func entries(for path: String, parse: () -> [Entry]) -> [Entry] {
+    static func signature(_ path: String) -> String {
         let attrs = try? FileManager.default.attributesOfItem(atPath: path)
-        let sig = "\((attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)|\(attrs?[.size] ?? 0)"
+        return "\((attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)|\(attrs?[.size] ?? 0)"
+    }
+
+    func entries(for path: String, parse: () -> [Entry]) -> [Entry] {
+        let sig = Self.signature(path)
         lock.lock()
         if let c = store[path], c.sig == sig { lock.unlock(); return c.entries }
         lock.unlock()
         let parsed = parse()
-        lock.lock(); store[path] = CachedFile(sig: sig, entries: parsed); lock.unlock()
+        lock.lock(); store[path] = CachedFile(sig: sig, entries: parsed); dirty = true; lock.unlock()
         return parsed
     }
 
+    /// Drops cached files under `prefix` that no longer exist on disk.
     func prune(keeping paths: Set<String>, prefix: String) {
+        let root = prefix.hasSuffix("/") ? prefix : prefix + "/"
         lock.lock(); defer { lock.unlock() }
-        for k in store.keys where k.hasPrefix(prefix) && !paths.contains(k) { store[k] = nil }
+        for k in store.keys where k.hasPrefix(root) && !paths.contains(k) { store[k] = nil; dirty = true }
     }
 
+    var isDirty: Bool { lock.lock(); defer { lock.unlock() }; return dirty }
+    var count: Int { lock.lock(); defer { lock.unlock() }; return store.count }
+
+    /// Writes the cache only when something changed; encoding happens outside the lock.
     func save() {
-        lock.lock(); defer { lock.unlock() }
-        if let d = try? JSONEncoder().encode(store) { try? d.write(to: url, options: .atomic) }
+        lock.lock()
+        guard dirty else { lock.unlock(); return }
+        let snapshot = store
+        dirty = false
+        lock.unlock()
+        guard let d = try? JSONEncoder().encode(snapshot) else { return }
+        do { try d.write(to: url, options: .atomic) } catch {
+            lock.lock(); dirty = true; lock.unlock()  // retry next refresh
+        }
     }
 }
 
@@ -87,12 +107,42 @@ func files(under dir: String, ext: String) -> [String] {
 
 func readLines(_ path: String, _ body: (Substring) -> Void) {
     guard let data = try? Data(contentsOf: URL(fileURLWithPath: path), options: .mappedIfSafe) else { return }
+    forEachLine(in: data, body)
+}
+
+/// Calls `body` for every non-empty LF-separated line of `data`.
+func forEachLine(in data: Data, _ body: (Substring) -> Void) {
     var start = data.startIndex
     while start < data.endIndex {
         let end = data[start...].firstIndex(of: 0x0A) ?? data.endIndex
         if end > start { body(Substring(String(decoding: data[start..<end], as: UTF8.self))) }
         start = end < data.endIndex ? data.index(after: end) : end
     }
+}
+
+/// Streams the stdout of a process line by line, without holding the whole output in memory.
+@discardableResult
+func streamLines(_ exe: String, _ args: [String], _ body: (Substring) -> Void) -> Bool {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: exe)
+    p.arguments = args
+    let pipe = Pipe()
+    p.standardOutput = pipe
+    p.standardError = FileHandle.nullDevice
+    do { try p.run() } catch { return false }
+    let h = pipe.fileHandleForReading
+    var pending = Data()
+    while true {
+        let chunk = h.availableData
+        if chunk.isEmpty { break }
+        pending.append(chunk)
+        guard let last = pending.lastIndex(of: 0x0A) else { continue }
+        forEachLine(in: pending[pending.startIndex...last], body)
+        pending = Data(pending[pending.index(after: last)...])
+    }
+    if !pending.isEmpty { forEachLine(in: pending, body) }
+    p.waitUntilExit()
+    return p.terminationStatus == 0
 }
 
 func json(_ line: Substring) -> [String: Any]? {

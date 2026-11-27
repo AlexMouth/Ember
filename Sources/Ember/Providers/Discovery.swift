@@ -39,7 +39,21 @@ enum Discovery {
                            "ollama", "opencode", "kiro", "agent-cli", "-ai", "ai-"]
     static let ignore = ["ember", "claude code url handler", "chrome", "brave", "chromium", "comet"]
 
-    static func providers() -> [UsageProvider] {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var cached: (at: Date, list: [UsageProvider])?
+    static let ttl: TimeInterval = 600
+
+    /// Provider list, rebuilt at most every `ttl` seconds (scanning /Applications and the
+    /// home folder on every refresh is wasted I/O). `force` bypasses the cache.
+    static func providers(force: Bool = false) -> [UsageProvider] {
+        lock.lock(); defer { lock.unlock() }
+        if !force, let c = cached, Date().timeIntervalSince(c.at) < ttl { return c.list }
+        let list = build()
+        cached = (Date(), list)
+        return list
+    }
+
+    static func build() -> [UsageProvider] {
         var list: [UsageProvider] = [ClaudeCode(), Codex(), GeminiCLI(), KiroCLI(), CursorIDE()]
         var known = Set(list.map { $0.id })
         var probed = Set<String>()  // lower-cased paths already covered

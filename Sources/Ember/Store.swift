@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import UserNotifications
+import Security
 
 enum Range: String, CaseIterable, Identifiable {
     case today = "Aujourd'hui", week = "7 jours", month = "30 jours", all = "Tout"
@@ -12,7 +13,7 @@ enum Range: String, CaseIterable, Identifiable {
 
 @MainActor
 final class Store: ObservableObject {
-    @Published var records: [UsageRecord] = []
+    @Published var records: [UsageRecord] = [] { didSet { filterCache.removeAll(); costCache.removeAll() } }
     @Published var hours: [HourBucket] = []
     @Published var quotas: [QuotaWindow] = []
     @Published var providers: [ProviderInfo] = []
@@ -27,6 +28,8 @@ final class Store: ObservableObject {
     @AppStorage("lastAlertLevel") private var lastAlertLevel = ""
     @AppStorage("menuMode") var menuMode = "auto"          // auto | quota | cost | icon
     @AppStorage("menuProvider") var menuProvider = "claude"
+    @AppStorage("menuTint") var menuTint = true             // flame green / orange / red by quota
+    @AppStorage("menuGauge") var menuGauge = false          // small gauge of the remaining quota next to the flame
     @AppStorage("quotaAlert") var quotaAlert = 0            // 0 = off, else % remaining threshold
     @AppStorage("quotaAlertFull") var quotaAlertFull = true  // also notify when a window is exhausted
     @AppStorage("alertedQuotas") private var alertedQuotas = ""
@@ -40,6 +43,9 @@ final class Store: ObservableObject {
     private var lastSave = Date.distantPast
     private var unsaved = false
     private var claudeCosts: [(ts: Double, cost: Double)] = []
+    /// Memoised aggregates, dropped whenever `records` changes. Views call these many times per render.
+    private var filterCache: [String: [UsageRecord]] = [:]
+    private var costCache: [String: Double] = [:]
 
     init() {
         providers = Discovery.providers().map {
@@ -47,8 +53,10 @@ final class Store: ObservableObject {
                          status: $0.installed() ? .detectedNoData(reason: "Analyse…") : .notInstalled, paths: $0.paths)
         }
         NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            guard let self, Date().timeIntervalSince(self.lastRefresh ?? .distantPast) > 20 else { return }
-            self.refresh()
+            MainActor.assumeIsolated {
+                guard let self, Date().timeIntervalSince(self.lastRefresh ?? .distantPast) > 20 else { return }
+                self.refresh()
+            }
         }
         for x in QuotaDisk.load() { index[x.key] = x }
         rebuildQuotas()
@@ -71,15 +79,14 @@ final class Store: ObservableObject {
         refreshing = true
         let cache = self.cache
         Task.detached(priority: .utility) {
-            var outputs: [(UsageProvider, ScanOutput)] = []
-            let lock = NSLock()
             let all = Discovery.providers()
+            let installed = all.map { $0.installed() }
+            let slots = ScanSlots(count: all.count)
             DispatchQueue.concurrentPerform(iterations: all.count) { i in
-                let p = all[i]
-                guard p.installed() else { return }
-                let o = p.scan(cache: cache)
-                lock.lock(); outputs.append((p, o)); lock.unlock()
+                guard installed[i] else { return }
+                slots.set(i, all[i].scan(cache: cache))
             }
+            let outputs: [(UsageProvider, ScanOutput)] = slots.values.enumerated().compactMap { i, o in o.map { (all[i], $0) } }
             cache.save()
             let (recs, hrs) = Store.aggregate(outputs)
             let samples = outputs.flatMap { $0.1.quotaSamples }
@@ -88,10 +95,10 @@ final class Store: ObservableObject {
                     input: e.input, output: e.output, cacheRead: e.cacheRead, cacheWrite: e.cacheWrite))) }
                 .sorted { $0.0 < $1.0 }
             let session = SessionInfo.latest(from: outputs.filter { $0.0.id == "claude" }.flatMap { $0.1.entries })
-            let infos: [ProviderInfo] = all.map { p in
+            let infos: [ProviderInfo] = all.enumerated().map { i, p in
                 let n = recs.filter { $0.provider == p.id }.count
                 let status: ProviderStatus
-                if !p.installed() { status = .notInstalled }
+                if !installed[i] { status = .notInstalled }
                 else if let d = p as? Detected { status = .detectedNoData(reason: d.reason) }
                 else if n > 0 { status = .active(records: n) }
                 else { status = .detectedNoData(reason: "Aucune donnée d'usage trouvée.") }
@@ -181,12 +188,17 @@ final class Store: ObservableObject {
 
     // MARK: queries
 
-    func cost(_ r: UsageRecord) -> Double { Pricing.shared.cost(r) }
+    func cost(_ r: UsageRecord) -> Double {
+        if let c = costCache[r.id] { return c }
+        let c = Pricing.shared.cost(r)
+        costCache[r.id] = c
+        return c
+    }
 
     func filtered(_ range: Range, provider: String? = nil) -> [UsageRecord] {
         let cutoff = range.days.map { Day.string(Calendar.current.date(byAdding: .day, value: -($0 - 1), to: Date())!) }
-        return records.filter { r in
-            (cutoff == nil || r.day >= cutoff!) && (provider == nil || r.provider == provider)
+        return memo("r|\(cutoff ?? "*")|\(provider ?? "*")") {
+            records.filter { r in (cutoff == nil || r.day >= cutoff!) && (provider == nil || r.provider == provider) }
         }
     }
 
@@ -195,10 +207,39 @@ final class Store: ObservableObject {
 
     var monthRecords: [UsageRecord] {
         let prefix = String(Day.string(Date()).prefix(7))
-        return records.filter { $0.day.hasPrefix(prefix) }
+        return memo("m|\(prefix)") { records.filter { $0.day.hasPrefix(prefix) } }
     }
     var monthCost: Double { totalCost(monthRecords) }
-    var todayCost: Double { totalCost(records.filter { $0.day == Day.string(Date()) }) }
+    var todayCost: Double {
+        let today = Day.string(Date())
+        return totalCost(memo("d|\(today)") { records.filter { $0.day == today } })
+    }
+
+    func breakdown(_ rs: [UsageRecord], by key: KeyPath<UsageRecord, String>) -> [Breakdown] {
+        Store.breakdown(rs, by: key, cost: cost)
+    }
+
+    /// Groups records by a field and totals each group once, sorted by cost, then tokens, then name.
+    nonisolated static func breakdown(_ rs: [UsageRecord], by key: KeyPath<UsageRecord, String>,
+                                      cost: (UsageRecord) -> Double) -> [Breakdown] {
+        var acc: [String: Breakdown] = [:]
+        for r in rs {
+            let k = r[keyPath: key]
+            var b = acc[k] ?? Breakdown(name: k)
+            b.cost += cost(r)
+            b.tokens += r.totalTokens
+            acc[k] = b
+        }
+        return acc.values.sorted { ($0.cost, $0.tokens, $1.name) > ($1.cost, $1.tokens, $0.name) }
+    }
+
+    /// Keys embed the cutoff day, so a cached entry can never outlive midnight.
+    private func memo(_ key: String, _ make: () -> [UsageRecord]) -> [UsageRecord] {
+        if let hit = filterCache[key] { return hit }
+        let v = make()
+        filterCache[key] = v
+        return v
+    }
 
     /// Linear projection of this month's spend from the average of days elapsed.
     var monthProjection: Double {
@@ -273,31 +314,19 @@ final class Store: ObservableObject {
 
     private func checkBudget() {
         guard monthlyBudget > 0 else { return }
-        let ratio = monthCost / monthlyBudget
+        let spent = monthCost, budget = monthlyBudget
+        let ratio = spent / budget
         let level = ratio >= 1 ? "100" : ratio >= 0.8 ? "80" : ""
         let key = String(Day.string(Date()).prefix(7)) + level
         guard !level.isEmpty, key != lastAlertLevel else { return }
         lastAlertLevel = key
-        guard Bundle.main.bundleIdentifier != nil else { return }
-        let center = UNUserNotificationCenter.current()
-        center.requestAuthorization(options: [.alert, .sound]) { ok, _ in
-            guard ok else { return }
-            let c = UNMutableNotificationContent()
-            c.title = "Ember — budget \(level) %"
-            c.body = String(format: "Dépense du mois : $%.2f sur $%.0f.", self.monthCost, self.monthlyBudget)
-            center.add(UNNotificationRequest(identifier: key, content: c, trigger: nil))
-        }
+        notify("Ember — budget \(level) %", String(format: "Dépense du mois : $%.2f sur $%.0f.", spent, budget), id: key)
     }
 
+    /// Posts a local notification. Authorization is requested once per launch, not on every alert.
     func notify(_ title: String, _ body: String, id: String) {
         guard Bundle.main.bundleIdentifier != nil else { return }
-        let center = UNUserNotificationCenter.current()
-        center.requestAuthorization(options: [.alert, .sound]) { ok, _ in
-            guard ok else { return }
-            let c = UNMutableNotificationContent()
-            c.title = title; c.body = body
-            center.add(UNNotificationRequest(identifier: id, content: c, trigger: nil))
-        }
+        Notifier.post(title: title, body: body, id: id)
     }
 
     /// One notification per quota window, the first time it drops under the chosen threshold.
@@ -330,10 +359,24 @@ final class Store: ObservableObject {
 
     // MARK: export
 
+    /// RFC 4180: a field is quoted when it holds a comma, quote, CR or LF; inner quotes are doubled.
+    /// Fields starting with = + - @ are prefixed with ' so spreadsheets don't run them as formulas.
+    nonisolated static func csvField(_ v: String) -> String {
+        var v = v
+        if let f = v.first, "=+-@".contains(f), Double(v) == nil { v = "'" + v }
+        guard v.contains(where: { $0 == "," || $0 == "\"" || $0 == "\n" || $0 == "\r" }) else { return v }
+        return "\"" + v.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+    }
+
+    nonisolated static func csvRow(_ fields: [String]) -> String { fields.map(csvField).joined(separator: ",") + "\r\n" }
+
     func exportCSV() -> URL? {
-        var s = "day,provider,model,project,input,output,cache_read,cache_write,messages,cost_usd,estimated\n"
+        var s = Store.csvRow(["day", "provider", "model", "project", "input", "output", "cache_read", "cache_write",
+                              "messages", "cost_usd", "estimated"])
         for r in records.sorted(by: { $0.day < $1.day }) {
-            s += "\(r.day),\(r.provider),\(r.model),\"\(r.project)\",\(r.input),\(r.output),\(r.cacheRead),\(r.cacheWrite),\(r.messages),\(String(format: "%.4f", cost(r))),\(r.estimated)\n"
+            s += Store.csvRow([r.day, r.provider, r.model, r.project, String(r.input), String(r.output),
+                               String(r.cacheRead), String(r.cacheWrite), String(r.messages),
+                               String(format: "%.4f", cost(r)), String(r.estimated)])
         }
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("ember-export.csv")
         try? s.write(to: url, atomically: true, encoding: .utf8)
@@ -345,18 +388,36 @@ final class Store: ObservableObject {
 
 struct LiveError: Error { var message: String }
 
+/// Drops every redirect: the request carries a bearer token that must only ever reach api.anthropic.com.
+final class RefuseRedirects: NSObject, URLSessionTaskDelegate, Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest) async -> URLRequest? { nil }
+}
+
 enum LiveClaude {
+    /// Ephemeral: no cookies, no credential store, no disk cache for responses fetched with the token.
+    static let session: URLSession = {
+        let c = URLSessionConfiguration.ephemeral
+        c.urlCache = nil
+        c.requestCachePolicy = .reloadIgnoringLocalCacheData
+        c.httpShouldSetCookies = false
+        return URLSession(configuration: c, delegate: RefuseRedirects(), delegateQueue: nil)
+    }()
+    static let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
+
     static func fetch() async -> Result<[QuotaWindow], LiveError> {
         let tokens = readTokens()
         guard !tokens.isEmpty else { return .failure(LiveError(message: "Aucun jeton Claude Code valide. Lancez `claude` dans un terminal puis /login pour vous reconnecter.")) }
-        var req = URLRequest(url: URL(string: "https://api.anthropic.com/api/oauth/usage")!)
+        var req = URLRequest(url: endpoint)
         req.timeoutInterval = 15
         req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
         do {
             var data = Data(), code = 0
             for t in tokens {
                 req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization")
-                let (d, resp) = try await URLSession.shared.data(for: req)
+                let (d, resp) = try await session.data(for: req)
+                // Refused redirects surface as the 3xx response itself: never treat it as data.
+                guard resp.url?.host == endpoint.host else { code = 0; continue }
                 data = d; code = (resp as? HTTPURLResponse)?.statusCode ?? 0
                 if code == 200 { break }
             }
@@ -375,22 +436,28 @@ enum LiveClaude {
     }
 
     /// Keychain service names Claude Code uses (one per config directory, e.g. "Claude Code-credentials-ab12cd34").
-    private static func credentialServices() -> [String] {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        p.arguments = ["dump-keychain"]
-        let pipe = Pipe()
-        p.standardOutput = pipe; p.standardError = FileHandle.nullDevice
+    /// Lists attributes only (never the secret), so it never triggers a Keychain prompt. Cached 10 min.
+    nonisolated(unsafe) private static var servicesCache: (names: [String], at: Date)?
+    private static let servicesLock = NSLock()
+
+    static func credentialServices() -> [String] {
+        servicesLock.lock(); defer { servicesLock.unlock() }
+        if let c = servicesCache, Date().timeIntervalSince(c.at) < 600 { return c.names }
         var names = ["Claude Code-credentials"]
-        guard (try? p.run()) != nil else { return names }
-        let text = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        p.waitUntilExit()
-        for line in text.split(separator: "\n") where line.contains("\"svce\"") {
-            if let r = line.range(of: "\"Claude Code-credentials[^\"]*\"", options: .regularExpression) {
-                let n = String(line[r]).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
-                if !names.contains(n) { names.append(n) }
+        let query: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecMatchLimit: kSecMatchLimitAll,
+            kSecReturnAttributes: true,
+        ]
+        var result: CFTypeRef?
+        if SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+           let items = result as? [[String: Any]] {
+            for item in items {
+                if let svc = item[kSecAttrService as String] as? String,
+                   svc.hasPrefix("Claude Code-credentials"), !names.contains(svc) { names.append(svc) }
             }
         }
+        servicesCache = (names, Date())
         return names
     }
 
@@ -418,4 +485,48 @@ enum LiveClaude {
         }
         return found.sorted { $0.exp > $1.exp }.map(\.token)
     }
+}
+
+// MARK: - Notifications
+
+/// Asks for notification permission once, then posts. Thread-safe.
+enum Notifier {
+    nonisolated(unsafe) private static var state: Bool?  // nil = not asked yet
+    nonisolated(unsafe) private static var pending: [UNNotificationRequest] = []
+    private static let lock = NSLock()
+
+    static func post(title: String, body: String, id: String) {
+        let c = UNMutableNotificationContent()
+        c.title = title; c.body = body
+        let req = UNNotificationRequest(identifier: id, content: c, trigger: nil)
+        lock.lock()
+        switch state {
+        case .some(true): lock.unlock(); UNUserNotificationCenter.current().add(req)
+        case .some(false): lock.unlock()
+        case .none:
+            let first = pending.isEmpty
+            pending.append(req)
+            lock.unlock()
+            guard first else { return }
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { ok, _ in
+                lock.lock(); state = ok; let queued = pending; pending = []; lock.unlock()
+                if ok { queued.forEach { UNUserNotificationCenter.current().add($0) } }
+            }
+        }
+    }
+}
+
+/// Results of a concurrent scan, one slot per provider, in provider order.
+struct Breakdown: Hashable {
+    var name: String
+    var cost: Double = 0
+    var tokens: Int = 0
+}
+
+final class ScanSlots: @unchecked Sendable {
+    private var slots: [ScanOutput?]
+    private let lock = NSLock()
+    init(count: Int) { slots = Array(repeating: nil, count: count) }
+    func set(_ i: Int, _ o: ScanOutput) { lock.lock(); slots[i] = o; lock.unlock() }
+    var values: [ScanOutput?] { lock.lock(); defer { lock.unlock() }; return slots }
 }

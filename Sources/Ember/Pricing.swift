@@ -1,62 +1,51 @@
 import Foundation
 
 /// USD per million tokens.
-struct Price: Codable, Equatable {
+struct Price: Codable, Equatable, Sendable {
     var input: Double
     var output: Double
     var cacheRead: Double
     var cacheWrite: Double
 }
 
-struct PriceResult {
+struct PriceResult: Sendable {
     var price: Price
     /// True when the exact model is unknown and a family fallback was used.
     var approximate: Bool
 }
 
-final class Pricing {
+final class Pricing: @unchecked Sendable {
     static let shared = Pricing()
+    /// Immutable after init.
     private var table: [String: Price] = [:]
-
-    /// Family fallbacks for model names newer than the bundled table.
+    /// Family fallbacks for model names newer than the bundled table (from pricing-fallbacks.json).
     /// Edit `~/Library/Application Support/Ember/pricing-overrides.json` to correct any of them.
-    private let families: [(match: String, ref: String)] = [
-        ("opus", "anthropic/claude-opus-4.8"),
-        ("sonnet", "anthropic/claude-sonnet-4"),
-        ("haiku", "anthropic/claude-haiku-4.5"),
-        ("fable", "anthropic/claude-fable-5"),
-        ("gpt-5", "openai/gpt-5"),
-        ("codex", "openai/gpt-5"),
-        ("flash", "google/gemini-2.5-flash"),
-        ("gemini", "google/gemini-2.5-pro"),
-        ("kimi", "moonshotai/kimi-k2"),
-    ]
+    private var families: [(match: String, ref: String)] = []
+    /// Memoized lookups: the same few model names are priced thousands of times per refresh.
+    private var memo: [String: PriceResult?] = [:]
+    private let lock = NSLock()
 
-    /// Public list prices (USD / M tokens) for providers missing from the bundled table.
-    /// Newer model names fall back to these through `families`; they are shown as approximate.
-    private let builtin: [String: Price] = [
-        "openai/gpt-5": Price(input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 1.25),
-        "google/gemini-2.5-pro": Price(input: 1.25, output: 10, cacheRead: 0.31, cacheWrite: 1.25),
-        "google/gemini-2.5-flash": Price(input: 0.30, output: 2.50, cacheRead: 0.075, cacheWrite: 0.30),
-    ]
-
-    init() {
-        table = builtin
-        if let url = Bundle.module.url(forResource: "pricing", withExtension: "json"),
-            let data = try? Data(contentsOf: url),
-            let raw = try? JSONSerialization.jsonObject(with: data) as? [String: [Double]]
-        {
-            for (k, v) in raw where v.count == 4 {
-                table[k] = Price(input: v[0], output: v[1], cacheRead: v[2], cacheWrite: v[3])
-            }
+    init(bundle: Bundle? = nil, overridesPath: String? = Paths.support + "/pricing-overrides.json") {
+        let bundle = bundle ?? Bundle.module
+        if let url = bundle.url(forResource: "pricing-fallbacks", withExtension: "json"),
+           let data = try? Data(contentsOf: url),
+           let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            for pair in raw["families"] as? [[String]] ?? [] where pair.count == 2 { families.append((pair[0], pair[1])) }
+            Self.load(raw["builtin"], into: &table, lowercase: false)
         }
-        let overrides = Paths.support + "/pricing-overrides.json"
-        if let data = FileManager.default.contents(atPath: overrides),
-            let raw = try? JSONSerialization.jsonObject(with: data) as? [String: [Double]]
-        {
-            for (k, v) in raw where v.count == 4 {
-                table[k.lowercased()] = Price(input: v[0], output: v[1], cacheRead: v[2], cacheWrite: v[3])
-            }
+        if let url = bundle.url(forResource: "pricing", withExtension: "json"),
+           let data = try? Data(contentsOf: url) {
+            Self.load(try? JSONSerialization.jsonObject(with: data), into: &table, lowercase: false)
+        }
+        if let overridesPath, let data = FileManager.default.contents(atPath: overridesPath) {
+            Self.load(try? JSONSerialization.jsonObject(with: data), into: &table, lowercase: true)
+        }
+    }
+
+    private static func load(_ raw: Any?, into table: inout [String: Price], lowercase: Bool) {
+        guard let raw = raw as? [String: [Double]] else { return }
+        for (k, v) in raw where v.count == 4 {
+            table[lowercase ? k.lowercased() : k] = Price(input: v[0], output: v[1], cacheRead: v[2], cacheWrite: v[3])
         }
     }
 
@@ -67,17 +56,26 @@ final class Pricing {
     }
 
     func lookup(_ model: String) -> PriceResult? {
+        lock.lock()
+        if let hit = memo[model] { lock.unlock(); return hit }
+        lock.unlock()
+        let r = resolve(model)
+        lock.lock(); memo[model] = .some(r); lock.unlock()
+        return r
+    }
+
+    private func resolve(_ model: String) -> PriceResult? {
         let m = normalize(model)
         if m.isEmpty || m == "<synthetic>" { return nil }
         let dotted = m.replacingOccurrences(of: "-", with: ".")
         let candidates = [m, "anthropic/\(m)", "openai/\(m)", "google/\(m)", "anthropic-\(m)", "openrouter/\(m)", dotted]
         for c in candidates { if let p = table[c] { return PriceResult(price: p, approximate: false) } }
-        // Same name after the vendor prefix.
-        if let hit = table.first(where: { $0.key.hasSuffix("/" + m) || $0.key.hasSuffix("--" + m) }) {
-            return PriceResult(price: hit.value, approximate: false)
+        // Same name after the vendor prefix (sorted so the pick is deterministic).
+        if let k = table.keys.filter({ $0.hasSuffix("/" + m) || $0.hasSuffix("--" + m) }).min() {
+            return PriceResult(price: table[k]!, approximate: false)
         }
         for f in families where m.contains(f.match) {
-            if let p = table[f.ref] ?? table.first(where: { $0.key.contains(f.match) })?.value {
+            if let p = table[f.ref] ?? table.keys.filter({ $0.contains(f.match) }).min().flatMap({ table[$0] }) {
                 return PriceResult(price: p, approximate: true)
             }
         }
@@ -92,21 +90,14 @@ final class Pricing {
             + Double(r.cacheRead) * p.cacheRead + Double(r.cacheWrite) * p.cacheWrite) / 1_000_000
     }
 
-    func isApproximate(_ model: String) -> Bool {
-        guard let r = lookup(model) else { return false }
-        return r.approximate
-    }
-
-    /// Blended rate for providers that only expose a total token count (assumes 85% in / 15% out).
-    func blended(_ model: String) -> Price? {
-        lookup(model)?.price
-    }
+    func isApproximate(_ model: String) -> Bool { lookup(model)?.approximate ?? false }
 }
 
 enum Paths {
-    static var support: String {
+    /// ~/Library/Application Support/Ember, created once.
+    static let support: String = {
         let p = home + "/Library/Application Support/Ember"
         try? FileManager.default.createDirectory(atPath: p, withIntermediateDirectories: true)
         return p
-    }
+    }()
 }
