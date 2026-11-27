@@ -4,7 +4,14 @@ import SwiftUI
 // MARK: - Pages
 
 final class SettingsFlags: ObservableObject {
-    @Published var confirmReset = false
+    /// `--settings-confirm-reset` opens the reset sheet at launch (used for screenshots).
+    @Published var confirmReset = CommandLine.arguments.contains("--settings-confirm-reset")
+    /// `--settings-bottom` scrolls the page to its end at launch (used for screenshots).
+    let startAtBottom = CommandLine.arguments.contains("--settings-bottom")
+    /// Word typed in the reset sheet; the Erase button stays disabled until it matches.
+    @Published var resetTyped = ""
+    /// Result of the last reset, shown under the Danger zone (nil = nothing done yet).
+    @Published var resetDone: Bool? = nil
     @Published var pricesAllTime = false
     @Published var pricesReloaded = false
     /// `--settings-pane <name>` opens a given pane (used for screenshots).
@@ -181,24 +188,32 @@ struct SettingsView: View {
             sidebar.frame(width: 220)
             Divider()
             let p = flags.pane ?? .general
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    header(p)
-                    page(p)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        header(p)
+                        page(p)
+                        Color.clear.frame(height: 0).id("bottom")
+                    }
+                    .frame(maxWidth: 640, alignment: .leading)
+                    .padding(.horizontal, 32).padding(.top, 40).padding(.bottom, 32)
+                    .frame(maxWidth: .infinity)
                 }
-                .frame(maxWidth: 640, alignment: .leading)
-                .padding(.horizontal, 32).padding(.top, 40).padding(.bottom, 32)
-                .frame(maxWidth: .infinity)
+                .onAppear {
+                    if flags.startAtBottom {
+                        for t in [1.5, 3.5, 6.0] {  // the model table fills in late
+                            DispatchQueue.main.asyncAfter(deadline: .now() + t) { proxy.scrollTo("bottom", anchor: .bottom) }
+                        }
+                    }
+                }
             }
             .id(p)  // back to the top when switching panes
             .background(Color(nsColor: .windowBackgroundColor))
         }
         .ignoresSafeArea()
         .frame(minWidth: 780, idealWidth: 880, minHeight: 540, idealHeight: 640)
-        .confirmationDialog("Effacer l'historique de quota d'Ember ?", isPresented: $flags.confirmReset) {
-            Button("Effacer", role: .destructive) { store.resetHistory() }
-        } message: {
-            Text("Les journaux de tes IA ne sont jamais touchés : Ember reconstruit tout au prochain scan.")
+        .sheet(isPresented: $flags.confirmReset, onDismiss: { flags.resetTyped = "" }) {
+            ResetConfirmSheet(flags: flags).environmentObject(store)
         }
     }
 
@@ -629,11 +644,9 @@ private struct DataPane: View {
                     if let u = store.exportCSV() { NSWorkspace.shared.activateFileViewerSelecting([u]) }
                 }
             }
-            SettingsRow(symbol: "trash", tint: .red, title: "Effacer l'historique de quota et le cache",
-                        detail: "Les journaux de tes IA ne sont jamais touchés.") {
-                Button("Effacer…", role: .destructive) { flags.confirmReset = true }
-            }
         }
+
+        DangerZone(flags: flags)
     }
 
     private var priceSourcesText: String {
@@ -778,5 +791,124 @@ private struct AboutPane: View {
                 Link("models.dev", destination: URL(string: "https://models.dev")!)
             }
         }
+    }
+}
+
+// MARK: - Danger zone
+
+/// Destructive actions, set apart in a red-bordered box below everything else.
+private struct DangerZone: View {
+    @ObservedObject var flags: SettingsFlags
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Label("Zone de danger", systemImage: "exclamationmark.triangle.fill")
+                .font(.subheadline.weight(.semibold)).foregroundStyle(.red)
+                .padding(.horizontal, 4)
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 12) {
+                    Image(systemName: "trash.fill").font(.system(size: 14)).foregroundStyle(.red).frame(width: 20)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Effacer l'historique de quota et le cache").fontWeight(.medium)
+                        Text("Les courbes de quota des 35 derniers jours seront perdues : elles ne peuvent pas être reconstruites.")
+                            .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 16)
+                    Button(role: .destructive) { flags.resetTyped = ""; flags.confirmReset = true } label: {
+                        Text("Effacer…").foregroundStyle(.red)
+                    }
+                    .accessibilityHint("Ouvre une confirmation avant d'effacer")
+                }
+                .padding(.horizontal, 14).padding(.vertical, 12)
+                if let done = flags.resetDone {
+                    Divider().padding(.leading, 14)
+                    Label(done ? "Effacé. Les fichiers sont dans la Corbeille si tu changes d'avis."
+                               : "Certains fichiers n'ont pas pu être déplacés dans la Corbeille.",
+                          systemImage: done ? "checkmark.circle.fill" : "xmark.octagon.fill")
+                        .font(.caption).foregroundStyle(done ? Color.secondary : Color.red)
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                }
+            }
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.red.opacity(0.06)))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.red.opacity(0.45), lineWidth: 1))
+            Text("Les journaux de tes IA ne sont jamais touchés : la consommation et les coûts se recalculent au prochain scan.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 4)
+        }
+        .padding(.top, 12)
+    }
+}
+
+/// Guard rail before erasing: says exactly what goes and what stays, offers an export first,
+/// and only enables the button once the user has typed the confirmation word.
+struct ResetConfirmSheet: View {
+    static let word = "EFFACER"
+    @EnvironmentObject var store: Store
+    @ObservedObject var flags: SettingsFlags
+    @Environment(\.dismiss) private var dismiss
+
+    private var matches: Bool {
+        flags.resetTyped.trimmingCharacters(in: .whitespaces).uppercased() == Self.word
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 14) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 30)).foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Effacer l'historique de quota ?").font(.title3.weight(.semibold))
+                    Text("Cette action ne peut pas être annulée depuis Ember.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                item("xmark.circle.fill", .red, "Historique de quota (35 jours) : perdu, les courbes repartent de zéro.")
+                item("arrow.clockwise.circle.fill", .orange, "Cache de lecture : reconstruit au prochain scan, qui sera plus long.")
+                item("checkmark.circle.fill", .green, "Journaux de tes IA, réglages et prix personnalisés : conservés.")
+                item("trash.circle.fill", .secondary, "Les fichiers (\(ByteCountFormatter.string(fromByteCount: Store.resettableBytes(), countStyle: .file))) vont dans la Corbeille : tu peux encore les récupérer depuis le Finder.")
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.05)))
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Pour confirmer, tape **\(Self.word)** ci-dessous.").font(.callout)
+                TextField(Self.word, text: $flags.resetTyped)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { if matches { erase() } }
+                    .accessibilityLabel("Mot de confirmation")
+            }
+
+            HStack {
+                Button("Exporter en CSV d'abord…") {
+                    if let u = store.exportCSV() { NSWorkspace.shared.activateFileViewerSelecting([u]) }
+                }
+                Spacer()
+                Button("Annuler") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button(role: .destructive) { erase() } label: {
+                    Text("Effacer définitivement")
+                }
+                .buttonStyle(.borderedProminent).tint(.red)
+                .disabled(!matches)
+            }
+        }
+        .padding(22)
+        .frame(width: 460)
+    }
+
+    private func item(_ symbol: String, _ tint: Color, _ text: String) -> some View {
+        Label {
+            Text(text).font(.callout).fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: symbol).foregroundStyle(tint)
+        }
+    }
+
+    private func erase() {
+        flags.resetDone = store.resetHistory()
+        dismiss()
     }
 }

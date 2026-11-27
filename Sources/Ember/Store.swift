@@ -366,11 +366,31 @@ final class Store: ObservableObject {
         alertedQuotas = seen.suffix(40).joined(separator: ",")
     }
 
-    func resetHistory() {
+    /// Files erased by `resetHistory()`: the quota history cannot be rebuilt, the scan cache can.
+    nonisolated static let resettableFiles = ["quota-history.json", "scan-cache.json"]
+
+    /// Total size on disk of the files `resetHistory()` would erase.
+    nonisolated static func resettableBytes() -> Int64 {
+        resettableFiles.reduce(0) { sum, f in
+            let a = try? FileManager.default.attributesOfItem(atPath: Paths.support + "/" + f)
+            return sum + ((a?[.size] as? NSNumber)?.int64Value ?? 0)
+        }
+    }
+
+    /// Moves the quota history and the scan cache to the Trash (so a mistake can be undone from
+    /// the Finder), then rescans. Returns false if a file could not be moved.
+    @discardableResult
+    func resetHistory() -> Bool {
+        var ok = true
+        for f in Self.resettableFiles {
+            let url = URL(fileURLWithPath: Paths.support + "/" + f)
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            do { try FileManager.default.trashItem(at: url, resultingItemURL: nil) } catch { ok = false }
+        }
         index = [:]
-        for f in ["/quota-history.json", "/scan-cache.json"] { try? FileManager.default.removeItem(atPath: Paths.support + f) }
         rebuildQuotas()
         refresh()
+        return ok
     }
 
     // MARK: export
