@@ -17,7 +17,8 @@ Application macOS de barre des menus (SwiftUI) qui suit, **en local**, la consom
 - **Tableau de bord** : aperçu (dépense, tokens, rythme, projection du mois), graphique de dépense jour/semaine/mois par source, pages par agent (modèles, projets, répartition des tokens).
 - **Session en cours** (Claude Code) : projet, durée, coût, tokens et modèle de la conversation active, dans le popover.
 - **Répartition par modèle et par projet** dans l'aperçu du tableau de bord (top 8, toutes sources confondues).
-- **Popover** dans la barre des menus, avec onglets par agent. Si le quota Claude ne peut plus être lu (jeton expiré), une bannière propose de se reconnecter (ouvre Terminal sur `claude /login`).
+- **Popover** dans la barre des menus : une carte par quota (gros pourcentage restant + barres 5 h / hebdo), session en cours, dépense du jour et des 30 jours, top des sources. Si le jeton Claude Code a expiré, la carte l'indique (« Estimation ») et un clic lance `claude`, ce qui suffit à le renouveler ; `claude /login` n'est proposé que si le compte est vraiment déconnecté.
+- **Réglages** façon Réglages Système : barre latérale (Général, Barre des menus, Notifications, Compte Claude, Données, Sources, À propos) avec aperçu en direct de l'icône de la barre des menus et état du jeton Claude (date d'expiration).
 - **Mise à jour intégrée** depuis les Releases GitHub, avec progression du téléchargement.
 - **Alertes** : budget mensuel (80 % / 100 %), seuil de quota restant au choix et notification quand une limite est atteinte (100 %), via notifications macOS.
 - **Export CSV**, prix des modèles modifiables (`pricing-overrides.json`), lancement à l'ouverture de session.

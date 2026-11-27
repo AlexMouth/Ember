@@ -69,6 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateLabel()
         Updater.shared.startAutoCheck()
         if CommandLine.arguments.contains("--open-dashboard") { showDashboard() }
+        if CommandLine.arguments.contains("--open-settings") { showSettings() }
     }
 
     /// Called on every store change; only touches the button when the text actually changes,
@@ -161,7 +162,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if settings == nil {
             let w = NSWindow(contentViewController: NSHostingController(rootView: SettingsView().environmentObject(store)))
             w.title = "Réglages Ember"
-            w.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            w.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+            w.titlebarAppearsTransparent = true
+            w.titleVisibility = .hidden
+            w.setContentSize(NSSize(width: 740, height: 540))
             w.isReleasedWhenClosed = false
             w.center()
             settings = w

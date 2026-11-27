@@ -20,6 +20,10 @@ final class Store: ObservableObject {
     @Published var lastRefresh: Date?
     @Published var refreshing = false
     @Published var liveStatus = ""
+    /// Why the live Claude quota cannot be read, nil when it can (or when the reading is off).
+    @Published var liveProblem: LiveError.Kind?
+    /// Expiry of the newest Claude Code access token seen in the Keychain.
+    @Published var liveTokenExpiry: Date?
     @Published var session: SessionInfo?
 
     @AppStorage("monthlyBudget") var monthlyBudget: Double = 0
@@ -266,20 +270,24 @@ final class Store: ObservableObject {
     nonisolated func refreshLive() async {
         let on = await MainActor.run { self.liveClaude }
         let last = await MainActor.run { self.lastLive }
-        guard on, Date().timeIntervalSince(last) > 300 else { return }
-        let result = await LiveClaude.fetch()
+        // While failing, retry every minute: Claude Code may have renewed its token in the meantime.
+        let failing = await MainActor.run { self.liveProblem != nil }
+        guard on, Date().timeIntervalSince(last) > (failing ? 55 : 300) else { return }
+        let (result, expiry) = await LiveClaude.fetch()
         await MainActor.run {
             self.lastLive = Date()
+            self.liveTokenExpiry = expiry
             switch result {
             case .success(let q):
                 self.liveStatus = "OK"
+                self.liveProblem = nil
                 let now = Date().timeIntervalSince1970
                 self.merge(q.compactMap { w in
                     w.resetsAt.map { QuotaSample(provider: w.provider, label: w.label, t: now, used: w.usedPercent,
                                                  resets: $0.timeIntervalSince1970, src: "live") }
                 })
                 self.backfillClaude()
-            case .failure(let e): self.liveStatus = e.message
+            case .failure(let e): self.liveStatus = e.message; self.liveProblem = e.kind
             }
         }
     }
@@ -386,7 +394,18 @@ final class Store: ObservableObject {
 
 // MARK: - Live Claude usage (read-only)
 
-struct LiveError: Error { var message: String }
+struct LiveError: Error {
+    enum Kind: Equatable {
+        /// A token exists but its validity ran out: Claude Code renews it on its next launch.
+        case expired
+        /// No token, or the server refused it: a new sign-in (`/login`) is needed.
+        case signedOut
+        /// Network or server trouble: nothing to do on the user's side.
+        case other
+    }
+    var kind: Kind = .other
+    var message: String
+}
 
 /// Drops every redirect: the request carries a bearer token that must only ever reach api.anthropic.com.
 final class RefuseRedirects: NSObject, URLSessionTaskDelegate, Sendable {
@@ -405,9 +424,19 @@ enum LiveClaude {
     }()
     static let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
 
-    static func fetch() async -> Result<[QuotaWindow], LiveError> {
-        let tokens = readTokens()
-        guard !tokens.isEmpty else { return .failure(LiveError(message: "Aucun jeton Claude Code valide. Lancez `claude` dans un terminal puis /login pour vous reconnecter.")) }
+    /// The result, plus the expiry of the newest token found (valid or not).
+    static func fetch() async -> (Result<[QuotaWindow], LiveError>, Date?) {
+        let (tokens, newest) = readTokens()
+        return (await fetch(tokens: tokens, newest: newest), newest)
+    }
+
+    private static func fetch(tokens: [String], newest: Date?) async -> Result<[QuotaWindow], LiveError> {
+        guard !tokens.isEmpty else {
+            if let newest {
+                return .failure(LiveError(kind: .expired, message: "Jeton Claude Code expiré depuis \(newest.formatted(date: .abbreviated, time: .shortened)). Il se renouvelle tout seul au prochain lancement de Claude Code."))
+            }
+            return .failure(LiveError(kind: .signedOut, message: "Aucun jeton Claude Code dans le trousseau. Connecte-toi avec `claude` puis /login."))
+        }
         var req = URLRequest(url: endpoint)
         req.timeoutInterval = 15
         req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
@@ -421,7 +450,7 @@ enum LiveClaude {
                 data = d; code = (resp as? HTTPURLResponse)?.statusCode ?? 0
                 if code == 200 { break }
             }
-            if code == 401 { return .failure(LiveError(message: "Jeton Claude Code expiré. Lancez `claude` dans un terminal puis /login pour vous reconnecter.")) }
+            if code == 401 { return .failure(LiveError(kind: .signedOut, message: "Jeton Claude Code refusé par Anthropic. Reconnecte-toi avec `claude` puis /login.")) }
             guard code == 200 else { return .failure(LiveError(message: "Réponse HTTP \(code)")) }
             guard let d = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return .failure(LiveError(message: "Format inattendu")) }
             var out: [QuotaWindow] = []
@@ -461,9 +490,11 @@ enum LiveClaude {
         return names
     }
 
-    /// Reads access tokens only (newest first). Never writes to the Keychain and never calls the refresh endpoint.
-    private static func readTokens() -> [String] {
+    /// Reads still-valid access tokens (newest first) and the expiry of the newest token seen, valid or not.
+    /// Never writes to the Keychain and never calls the refresh endpoint.
+    private static func readTokens() -> (tokens: [String], newest: Date?) {
         var found: [(token: String, exp: Double)] = []
+        var newest: Double = 0
         for service in credentialServices() {
             let p = Process()
             p.executableURL = URL(fileURLWithPath: "/usr/bin/security")
@@ -480,10 +511,11 @@ enum LiveClaude {
                 let token = oauth["accessToken"] as? String, !token.isEmpty
             else { continue }
             let exp = oauth["expiresAt"] as? Double ?? 0
+            newest = max(newest, exp)
             if exp > 0, exp < Date().timeIntervalSince1970 * 1000 { continue }
             found.append((token, exp))
         }
-        return found.sorted { $0.exp > $1.exp }.map(\.token)
+        return (found.sorted { $0.exp > $1.exp }.map(\.token), newest > 0 ? Date(timeIntervalSince1970: newest / 1000) : nil)
     }
 }
 

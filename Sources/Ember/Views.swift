@@ -64,35 +64,67 @@ final class LoginState: ObservableObject {
     }
 }
 
-/// A titled glass card used by every settings tab.
-struct SCard<Content: View>: View {
-    let title: String
-    @ViewBuilder var content: Content
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary).textCase(.uppercase)
-            VStack(alignment: .leading, spacing: 10) { content }
-                .padding(14).frame(maxWidth: .infinity, alignment: .leading).card(radius: 12)
+/// ImageRenderer cannot draw ScrollViews, so `--snapshot` flips this.
+enum SnapshotMode { nonisolated(unsafe) static var on = false }
+
+final class SettingsFlags: ObservableObject {
+    @Published var confirmReset = false
+    /// `--settings-pane <name>` opens a given pane (used for screenshots).
+    @Published var pane: SettingsPage? = CommandLine.arguments.firstIndex(of: "--settings-pane")
+        .flatMap { $0 + 1 < CommandLine.arguments.count ? SettingsPage(rawValue: CommandLine.arguments[$0 + 1]) : nil } ?? .general
+}
+
+enum SettingsPage: String, CaseIterable, Identifiable {
+    case general, menuBar, alerts, claude, data, sources, about
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .general: "Général"
+        case .menuBar: "Barre des menus"
+        case .alerts: "Notifications"
+        case .claude: "Compte Claude"
+        case .data: "Données"
+        case .sources: "Sources"
+        case .about: "À propos"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .general: "gearshape.fill"
+        case .menuBar: "menubar.rectangle"
+        case .alerts: "bell.badge.fill"
+        case .claude: "key.fill"
+        case .data: "externaldrive.fill"
+        case .sources: "square.stack.3d.up.fill"
+        case .about: "info.circle.fill"
+        }
+    }
+    var tint: Color {
+        switch self {
+        case .general: .gray
+        case .menuBar: .blue
+        case .alerts: .red
+        case .claude: .orange
+        case .data: .indigo
+        case .sources: .green
+        case .about: .gray
         }
     }
 }
 
-func note(_ t: String) -> some View { Text(t).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
-
-/// ImageRenderer cannot draw ScrollViews, so `--snapshot` flips this.
-enum SnapshotMode { nonisolated(unsafe) static var on = false }
-
-struct SettingsPane<Content: View>: View {
-    @ViewBuilder var content: Content
+/// System Settings–style icon: white glyph on a small rounded colour tile.
+struct SettingsIcon: View {
+    let page: SettingsPage
     var body: some View {
-        let body = VStack(alignment: .leading, spacing: 18) { content }.padding(20)
-        Group { if SnapshotMode.on { body } else { ScrollView { body } } }
-            .background(AmbientBackground(strength: 0.7))
+        Image(systemName: page.symbol)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 22, height: 22)
+            .background(page.tint.gradient, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 }
 
-final class SettingsFlags: ObservableObject { @Published var confirmReset = false }
-
+/// Settings window: sidebar of panes, native grouped forms on the right (System Settings layout).
 struct SettingsView: View {
     @EnvironmentObject var store: Store
     @StateObject private var login = LoginState()
@@ -103,79 +135,112 @@ struct SettingsView: View {
         return store.providers.filter { ids.contains($0.id) }
     }
 
-    /// Renders a single tab without the TabView (used by `--snapshot`).
-    var only: String? = nil
-
     var body: some View {
-        if let only {
-            Group { only == "alerts" ? AnyView(alerts) : AnyView(general) }
-        } else { tabs }
+        HStack(spacing: 0) {
+            List(SettingsPage.allCases, selection: $flags.pane) { p in
+                Label { Text(p.title) } icon: { SettingsIcon(page: p) }.tag(p)
+            }
+            .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .padding(.top, 28)
+            .frame(width: 210)
+            .background(.regularMaterial)
+            Divider()
+            let p = flags.pane ?? .general
+            VStack(alignment: .leading, spacing: 0) {
+                Text(p.title).font(.title2.weight(.semibold))
+                    .padding(.horizontal, 20).padding(.top, 34)
+                page(p).formStyle(.grouped)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .ignoresSafeArea()
+        .frame(minWidth: 700, idealWidth: 720, minHeight: 500, idealHeight: 540)
+        .confirmationDialog("Effacer l'historique de quota d'Ember ?", isPresented: $flags.confirmReset) {
+            Button("Effacer", role: .destructive) { store.resetHistory() }
+        } message: {
+            Text("Les journaux de tes IA ne sont jamais touchés : Ember reconstruit tout au prochain scan.")
+        }
     }
 
-    var tabs: some View {
-        TabView {
-            general.tabItem { Label("Général", systemImage: "gearshape") }
-            alerts.tabItem { Label("Alertes", systemImage: "bell.badge") }
-            quota.tabItem { Label("Quotas", systemImage: "gauge.with.dots.needle.67percent") }
-            data.tabItem { Label("Données", systemImage: "externaldrive") }
-            SourcesView().tabItem { Label("Sources", systemImage: "square.stack.3d.up") }
-            about.tabItem { Label("À propos", systemImage: "info.circle") }
+    @ViewBuilder func page(_ p: SettingsPage) -> some View {
+        switch p {
+        case .general: general
+        case .menuBar: menuBar
+        case .alerts: alerts
+        case .claude: claude
+        case .data: data
+        case .sources: sources
+        case .about: about
         }
-        .frame(width: 600, height: 500)
     }
+
+    // MARK: panes
 
     var general: some View {
-        SettingsPane {
-            SCard(title: "Démarrage") {
-                Toggle("Lancer Ember à l'ouverture de session", isOn: $login.enabled)
+        Form {
+            Section {
+                Toggle("Ouvrir Ember à l'ouverture de session", isOn: $login.enabled)
             }
-            SCard(title: "Barre des menus") {
-                Picker("Afficher", selection: store.$menuMode) {
-                    Text("Quota si dispo, sinon dépense du jour").tag("auto")
+            Section {
+                Picker("Actualiser", selection: store.$refreshMinutes) {
+                    ForEach([1, 2, 5, 10, 15, 30], id: \.self) { Text("Toutes les \($0) min").tag($0) }
+                }
+                .onChange(of: store.refreshMinutes) { _, _ in store.schedule() }
+            } footer: {
+                Text("Ember actualise aussi à chaque ouverture du menu.").foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    var menuBar: some View {
+        Form {
+            Section {
+                LabeledContent("Aperçu") { MenuBarPreview() }
+            }
+            Section {
+                Picker("Texte", selection: store.$menuMode) {
+                    Text("Quota restant, sinon dépense").tag("auto")
                     Text("Quota restant").tag("quota")
                     Text("Dépense du jour").tag("cost")
-                    Text("Icône seule").tag("icon")
+                    Text("Aucun (icône seule)").tag("icon")
                 }
                 if store.menuMode == "auto" || store.menuMode == "quota" {
-                    Picker("Quota de", selection: store.$menuProvider) {
+                    Picker("Quota suivi", selection: store.$menuProvider) {
                         ForEach(quotaProviders) { p in Text(p.name).tag(p.id) }
                     }
                 }
-                Toggle("Colorer la flamme selon le quota", isOn: store.$menuTint)
-                Toggle("Mini-jauge du quota restant", isOn: store.$menuGauge)
-                Text("Vert tant que le quota va bien, orange dès 80 % utilisés, rouge dès 95 %.")
-                    .font(.caption).foregroundStyle(.secondary)
             }
-            SCard(title: "Actualisation") {
-                Stepper("Toutes les \(store.refreshMinutes) min", value: store.$refreshMinutes, in: 1...30)
-                    .onChange(of: store.refreshMinutes) { _, _ in store.schedule() }
-                Text("Ember actualise aussi chaque fois que tu reviens sur l'app.").font(.caption).foregroundStyle(.secondary)
+            Section {
+                Toggle("Flamme colorée selon le quota", isOn: store.$menuTint)
+                Toggle("Mini-jauge du quota restant", isOn: store.$menuGauge)
+            } footer: {
+                Text("Verte tant que le quota va bien, orange dès 80 % utilisés, rouge dès 95 %.").foregroundStyle(.secondary)
             }
         }
     }
 
     var alerts: some View {
-        SettingsPane {
-            SCard(title: "Budget mensuel") {
-                HStack {
-                    Text("Budget (USD)")
-                    Spacer()
-                    TextField("0 = désactivé", value: store.$monthlyBudget, format: .number).frame(width: 110).multilineTextAlignment(.trailing)
+        Form {
+            Section {
+                LabeledContent("Budget mensuel") {
+                    TextField("Aucun", value: store.$monthlyBudget, format: .currency(code: "USD").precision(.fractionLength(0)))
+                        .labelsHidden().multilineTextAlignment(.trailing).frame(width: 100)
                 }
-                note("Notification à 80 % puis à 100 % du budget. Prévision de fin de mois : \(money(store.monthProjection)).")
+                LabeledContent("Projection du mois", value: money(store.monthProjection))
+            } header: { Text("Budget") } footer: {
+                Text("Notification à 80 % puis à 100 % du budget. 0 désactive l'alerte.").foregroundStyle(.secondary)
             }
-            SCard(title: "Quotas") {
-                Picker("Prévenir sous", selection: store.$quotaAlert) {
+            Section {
+                Picker("Prévenir quand il reste", selection: store.$quotaAlert) {
                     Text("Jamais").tag(0)
-                    Text("30 % restants").tag(30)
-                    Text("20 % restants").tag(20)
-                    Text("10 % restants").tag(10)
-                    Text("5 % restants").tag(5)
+                    ForEach([30, 20, 10, 5], id: \.self) { Text("\($0) %").tag($0) }
                 }
-                Toggle("Prévenir aussi quand la limite est atteinte (100 %)", isOn: store.$quotaAlertFull)
-                note("Une seule notification par fenêtre (5 h, hebdomadaire…) et par seuil.")
+                Toggle("Prévenir quand la limite est atteinte", isOn: store.$quotaAlertFull)
+            } header: { Text("Quotas") } footer: {
+                Text("Une seule notification par fenêtre (5 h, hebdomadaire…) et par seuil.").foregroundStyle(.secondary)
             }
-            SCard(title: "Test") {
+            Section {
                 Button("Envoyer une notification de test") {
                     store.notify("Ember", "Les notifications fonctionnent.", id: "test-" + UUID().uuidString)
                 }
@@ -183,55 +248,147 @@ struct SettingsView: View {
         }
     }
 
-    var quota: some View {
-        SettingsPane {
-            SCard(title: "Quota Claude en direct (optionnel)") {
-                Toggle("Lire le quota réel depuis le compte Claude", isOn: store.$liveClaude)
-                note("Activé par défaut. Ember lit le jeton de Claude Code dans ton trousseau (lecture seule, macOS peut demander l'autorisation la première fois) et interroge api.anthropic.com. Il ne renouvelle jamais le jeton et n'écrit jamais dans le trousseau. Le quota n'est connu que pour le présent : la courbe du début de la fenêtre en cours est reconstituée à partir de ta consommation Claude Code et mise à l'échelle sur le niveau réel.")
-                if !store.liveStatus.isEmpty { Label(store.liveStatus, systemImage: "info.circle").font(.caption) }
+    var claude: some View {
+        Form {
+            Section {
+                Toggle("Lire le quota réel du compte Claude", isOn: store.$liveClaude)
+                if store.liveClaude {
+                    LabeledContent("État") { ClaudeLinkStatus() }
+                    if let e = store.liveTokenExpiry {
+                        LabeledContent(e < Date() ? "Jeton expiré" : "Jeton valide jusqu'à",
+                                       value: e.formatted(date: .abbreviated, time: .shortened))
+                    }
+                }
+            } footer: {
+                Text("Ember lit le jeton de Claude Code dans le trousseau, en lecture seule, et interroge api.anthropic.com. Il ne renouvelle jamais ce jeton : c'est Claude Code qui le fait quand il tourne.")
+                    .foregroundStyle(.secondary)
+            }
+            if store.liveClaude, let k = store.liveProblem {
+                Section {
+                    Text(store.liveStatus).foregroundStyle(.secondary)
+                    HStack {
+                        if k == .signedOut {
+                            Button("Se reconnecter (/login)") { ClaudeLink.open(login: true) }
+                        } else {
+                            Button("Lancer Claude Code") { ClaudeLink.open(login: false) }
+                        }
+                        Button("Réessayer") { store.refresh() }
+                    }
+                } header: { Text("Pourquoi") }
             }
         }
     }
 
     var data: some View {
-        SettingsPane {
-            SCard(title: "Fichiers") {
-                Button("Ouvrir le dossier de données") { NSWorkspace.shared.open(URL(fileURLWithPath: Paths.support)) }
-                Button("Modifier les prix des modèles…") {
-                    let f = Paths.support + "/pricing-overrides.json"
-                    if !FileManager.default.fileExists(atPath: f) {
-                        try? "{\n  \"mon-modele\": [3.0, 15.0, 0.3, 3.75]\n}\n".write(toFile: f, atomically: true, encoding: .utf8)
+        Form {
+            Section {
+                LabeledContent("Dossier de données") {
+                    Button("Afficher dans le Finder") { NSWorkspace.shared.open(URL(fileURLWithPath: Paths.support)) }
+                }
+                LabeledContent("Prix des modèles") {
+                    Button("Modifier…") {
+                        let f = Paths.support + "/pricing-overrides.json"
+                        if !FileManager.default.fileExists(atPath: f) {
+                            try? "{\n  \"mon-modele\": [3.0, 15.0, 0.3, 3.75]\n}\n".write(toFile: f, atomically: true, encoding: .utf8)
+                        }
+                        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: f)])
                     }
-                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: f)])
                 }
-                note("Prix en USD par million de tokens : [entrée, sortie, cache lu, cache écrit]. Pris en compte au prochain lancement.")
-            }
-            SCard(title: "Export") {
-                Button("Exporter tout en CSV…") {
-                    if let u = store.exportCSV() { NSWorkspace.shared.activateFileViewerSelecting([u]) }
+                LabeledContent("Toute la consommation") {
+                    Button("Exporter en CSV…") {
+                        if let u = store.exportCSV() { NSWorkspace.shared.activateFileViewerSelecting([u]) }
+                    }
                 }
+            } footer: {
+                Text("Prix en USD par million de tokens : [entrée, sortie, cache lu, cache écrit], pris en compte au prochain lancement.")
+                    .foregroundStyle(.secondary)
             }
-            SCard(title: "Réinitialiser") {
-                Button("Effacer l'historique de quota et le cache…", role: .destructive) { flags.confirmReset = true }
-                note("Les journaux des IA ne sont jamais touchés : Ember reconstruit tout au prochain scan.")
+            Section {
+                LabeledContent("Historique de quota et cache") {
+                    Button("Effacer…", role: .destructive) { flags.confirmReset = true }
+                }
             }
         }
-        .confirmationDialog("Effacer l'historique de quota d'Ember ?", isPresented: $flags.confirmReset) {
-            Button("Effacer", role: .destructive) { store.resetHistory() }
+    }
+
+    var sources: some View {
+        Form {
+            Section {
+                ForEach(store.providers.filter { $0.status != .notInstalled }) { p in
+                    HStack(spacing: 10) {
+                        ProviderIcon(id: p.id, symbol: p.symbol, size: 22)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(p.name)
+                            Text(p.paths.joined(separator: " · ")).font(.caption).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
+                        }
+                        Spacer()
+                        switch p.status {
+                        case .active: Text("Suivie").font(.callout).foregroundStyle(.green)
+                        case .detectedNoData: Text("Sans données").font(.callout).foregroundStyle(.secondary)
+                        case .notInstalled: EmptyView()
+                        }
+                    }
+                    .help({ if case .detectedNoData(let r) = p.status { return r } else { return "" } }())
+                }
+            } footer: {
+                Text("Les IA « sans données » sont installées mais ne laissent aucun compteur lisible sur le Mac.").foregroundStyle(.secondary)
+            }
         }
     }
 
     var about: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "flame.fill").font(.system(size: 44)).foregroundStyle(.orange)
-            Text("Ember").font(.title.weight(.bold))
-            Text("Suivi local de la consommation de tes IA").foregroundStyle(.secondary)
-            Divider().frame(width: 200)
-            Text("Tout est calculé sur ton Mac. Aucune donnée n'est envoyée, sauf l'appel Anthropic si tu actives le quota Claude en direct.")
-                .font(.callout).multilineTextAlignment(.center).foregroundStyle(.secondary).frame(maxWidth: 380)
-            Text("Prix des modèles : models.dev").font(.caption).foregroundStyle(.tertiary)
-            Divider().frame(width: 200)
-            UpdateRow().frame(maxWidth: 380)
-        }.padding()
+        Form {
+            Section {
+                HStack(spacing: 14) {
+                    Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 56, height: 56)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Ember").font(.title2.weight(.semibold))
+                        Text("Suivi local de la consommation de tes IA").foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 4)
+                UpdateRow()
+            } footer: {
+                Text("Tout est calculé sur ton Mac. Seul le quota Claude en direct contacte api.anthropic.com. Prix des modèles : models.dev.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+/// Live preview of the menu-bar item with the current settings.
+struct MenuBarPreview: View {
+    @EnvironmentObject var store: Store
+    var body: some View {
+        let used = primaryQuota(store.quotas(for: store.menuProvider))?.usedPercent
+        let level = store.menuTint && used != nil ? AppDelegate.alertLevel(used: used) : nil
+        let gauge = store.menuGauge ? used.map { (100 - min(max($0, 0), 100)) / 100 } : nil
+        HStack(spacing: 4) {
+            if let img = AppDelegate.flame(level: level, remaining: gauge) {
+                Image(nsImage: img).renderingMode(level == nil ? .template : .original)
+            }
+            let t = AppDelegate.current?.menuLabel ?? ""
+            if !t.isEmpty { Text(t).monospacedDigit() }
+        }
+        .font(.system(size: 13))
+        .padding(.horizontal, 10).padding(.vertical, 4)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+}
+
+/// Connection state of the live Claude quota, as a coloured dot and a short word.
+struct ClaudeLinkStatus: View {
+    @EnvironmentObject var store: Store
+    var body: some View {
+        let (c, t): (Color, String) = switch store.liveProblem {
+        case nil: store.liveStatus == "OK" ? (.green, "Connecté") : (.gray, "En attente")
+        case .expired: (.orange, "Jeton expiré")
+        case .signedOut: (.red, "Déconnecté")
+        case .other: (.orange, "Injoignable")
+        }
+        HStack(spacing: 6) {
+            Circle().fill(c).frame(width: 8, height: 8)
+            Text(t)
+        }
     }
 }

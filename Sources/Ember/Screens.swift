@@ -140,8 +140,8 @@ struct SessionCard: View {
             }
             HStack(spacing: 12) {
                 Label(durationText(s.duration), systemImage: "clock").lineLimit(1).fixedSize()
-                Label(compact(s.tokens), systemImage: "circle.grid.2x2")
-                Label("\(s.messages) msg", systemImage: "bubble.left")
+                Label(compact(s.tokens), systemImage: "circle.grid.2x2").fixedSize()
+                Label("\(s.messages) msg", systemImage: "bubble.left").fixedSize()
                 Spacer()
                 Text(s.model).lineLimit(1).foregroundStyle(.tertiary)
             }.font(.caption).foregroundStyle(.secondary).labelStyle(.titleAndIcon)
@@ -156,29 +156,12 @@ func durationText(_ t: TimeInterval) -> String {
     return m >= 60 ? "\(m / 60) h \(m % 60) min" : "\(max(m, 1)) min"
 }
 
-/// Offered when the live Claude quota cannot be read (token missing or expired).
-struct ReconnectBanner: View {
-    @EnvironmentObject var store: Store
-    var failing: Bool { store.liveClaude && !store.liveStatus.isEmpty && store.liveStatus != "OK" }
-    var body: some View {
-        if failing {
-            HStack(spacing: 10) {
-                Image(systemName: "key.slash").foregroundStyle(.orange)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Quota Claude déconnecté").font(.callout.weight(.medium))
-                    Text("Reconnecte-toi avec /login, puis actualise.").font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button("Se reconnecter") { Self.openLogin() }.emberProminent().tint(.orange).controlSize(.small)
-            }
-            .padding(10).card(radius: 10)
-        }
-    }
-
-    /// Opens Terminal on `claude /login` through a throwaway .command file (no Automation permission needed).
-    static func openLogin() {
-        let f = FileManager.default.temporaryDirectory.appendingPathComponent("ember-login.command")
-        let script = "#!/bin/zsh -l\nclear\necho \"Reconnexion de Claude Code…\"\nclaude /login\n"
+/// Opens Terminal on Claude Code through a throwaway .command file (no Automation permission needed).
+/// Launching `claude` is enough to renew an expired token; `/login` is only for a signed-out account.
+enum ClaudeLink {
+    static func open(login: Bool) {
+        let f = FileManager.default.temporaryDirectory.appendingPathComponent("ember-claude.command")
+        let script = "#!/bin/zsh -l\nclear\n" + (login ? "echo \"Reconnexion de Claude Code…\"\nclaude /login\n" : "claude\n")
         try? script.write(to: f, atomically: true, encoding: .utf8)
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: f.path)
         NSWorkspace.shared.open(f)
@@ -187,173 +170,160 @@ struct ReconnectBanner: View {
 
 // MARK: - Menu bar popover
 
-final class PopState: ObservableObject { @Published var tab = "general" }
+/// One provider's quota windows: the big number is the window that runs out first.
+struct QuotaHero: View {
+    @EnvironmentObject var store: Store
+    let pid: String
+    var body: some View {
+        let qs = store.quotas(for: pid).sorted { $0.windowMinutes < $1.windowMinutes }
+        let tight = qs.min { $0.usedPercent > $1.usedPercent }
+        let stale = pid == "claude" && store.liveClaude && store.liveProblem != nil
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                ProviderIcon(id: pid, symbol: store.providers.first { $0.id == pid }?.symbol ?? "sparkles", size: 16)
+                Text(store.providerName(pid)).font(.callout.weight(.semibold))
+                Spacer()
+                if stale {
+                    Button { ClaudeLink.open(login: store.liveProblem == .signedOut) } label: {
+                        Label("Estimation", systemImage: "exclamationmark.triangle.fill")
+                    }
+                    .buttonStyle(.plain).font(.caption.weight(.medium)).foregroundStyle(.orange)
+                    .help(store.liveStatus + (store.liveProblem == .signedOut ? "\nCliquer pour se reconnecter." : "\nCliquer pour lancer Claude Code."))
+                }
+            }
+            if let t = tight {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(String(format: "%.0f", max(0, 100 - t.usedPercent)))
+                        .font(.system(size: 34, weight: .semibold, design: .rounded)).monospacedDigit()
+                    Text("% restant").font(.callout).foregroundStyle(.secondary)
+                    if qs.count > 1 { Text("· \(t.title)").font(.callout).foregroundStyle(.tertiary) }
+                }
+            }
+            ForEach(qs) { q in
+                let left = max(0, 100 - q.usedPercent)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(q.title).font(.caption)
+                        Spacer()
+                        Text(resetText(q.resetsAt)).font(.caption).foregroundStyle(.tertiary)
+                        Text(String(format: "%.0f %%", left)).font(.caption.weight(.semibold)).monospacedDigit().frame(minWidth: 34, alignment: .trailing)
+                    }
+                    shareBar(left / 100, quotaColor(used: q.usedPercent))
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(store.providerName(pid)), \(q.title)")
+                .accessibilityValue(String(format: "%.0f %% restants, %@", left, resetText(q.resetsAt)))
+            }
+        }
+        .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+        .card(radius: 14)
+    }
+}
+
+func quotaColor(used: Double) -> Color {
+    [Color.green, .orange, .red][AppDelegate.alertLevel(used: used)]
+}
 
 struct MenuBarView: View {
     @EnvironmentObject var store: Store
-    @StateObject private var pop: PopState
     var openDashboard: () -> Void = {}
     var openSettings: () -> Void = {}
 
-    init(tab: String = "general", openDashboard: @escaping () -> Void = {}, openSettings: @escaping () -> Void = {}) {
-        self.openDashboard = openDashboard; self.openSettings = openSettings
-        let st = PopState(); st.tab = tab
-        _pop = StateObject(wrappedValue: st)
-    }
-
-    var tabs: [ProviderInfo] {
-        store.providers.filter { p in
-            if case .active = p.status { return true }
-            return !store.quotas(for: p.id).isEmpty
-        }
+    var quotaIDs: [String] {
+        let ids = Set(store.quotas.map(\.provider))
+        // The provider shown in the menu bar comes first.
+        return ids.sorted { a, b in a == store.menuProvider ? true : b == store.menuProvider ? false : a < b }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                Image(systemName: "flame.fill").font(.title2).foregroundStyle(.orange)
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("Ember").font(.headline)
-                    Text(store.quotas.isEmpty ? "Aujourd'hui \(money(store.todayCost))"
-                         : store.quotas.compactMap { q in primaryQuota(store.quotas(for: q.provider)) == q ? "\(store.providerName(q.provider)) \(Int(100 - q.usedPercent)) %" : nil }.joined(separator: " · "))
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
+        VStack(alignment: .leading, spacing: 10) {
+            header
             UpdateBanner()
-            ReconnectBanner()
-            tabBar
-            Group {
-                if pop.tab == "general" { general } else { providerTab(pop.tab) }
+            ForEach(quotaIDs, id: \.self) { QuotaHero(pid: $0) }
+            if quotaIDs.isEmpty, store.liveClaude, store.providers.contains(where: { $0.id == "claude" && $0.status != .notInstalled }) {
+                QuotaMissing(provider: "claude")
             }
-            Button { openDashboard() } label: {
-                Label("Ouvrir le tableau de bord", systemImage: "rectangle.on.rectangle").frame(maxWidth: .infinity)
-            }
-            .emberProminent().controlSize(.large).tint(.orange).keyboardShortcut("d")
-            HStack(spacing: 14) {
-                if let t = store.lastRefresh {
-                    Text("Mis à jour \(t.formatted(date: .omitted, time: .shortened))").font(.caption).foregroundStyle(.tertiary)
-                }
-                Spacer()
-                Button { store.refresh() } label: { Image(systemName: "arrow.clockwise") }
-                    .help("Actualiser").accessibilityLabel("Actualiser").disabled(store.refreshing)
-                Button { openSettings() } label: { Image(systemName: "gearshape") }.help("Réglages").accessibilityLabel("Réglages")
-                Button { NSApplication.shared.terminate(nil) } label: { Image(systemName: "power") }
-                    .help("Quitter Ember").accessibilityLabel("Quitter Ember").keyboardShortcut("q")
-            }
-            .emberGlass().controlSize(.small).foregroundStyle(.secondary)
+            if let s = store.session, s.isLive { SessionCard(s: s) }
+            spend
+            footer
         }
-        .padding(14).frame(width: 372)
-        .background(AmbientBackground(strength: 0.8))
+        .padding(12).frame(width: 340)
+        .background(AmbientBackground(strength: 0.6))
         .environment(\.inPopover, true)
     }
 
-    var tabBar: some View {
-        HStack(spacing: 4) {
-            tabButton("general", "Général", "square.grid.2x2")
-            ForEach(tabs) { p in tabButton(p.id, p.name.replacingOccurrences(of: " CLI", with: "").replacingOccurrences(of: " Code", with: ""), p.symbol) }
-        }
-        .padding(3).card(radius: 14)
-    }
-
-    func tabButton(_ id: String, _ title: String, _ icon: String) -> some View {
-        Button { pop.tab = id } label: {
-            HStack(spacing: 4) {
-                if id != "general" { ProviderIcon(id: id, symbol: icon, size: 16) }
-                if id == "general" || pop.tab == id { Text(title).font(.caption).lineLimit(1) }
+    var header: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "flame.fill").foregroundStyle(.orange).font(.title3)
+            Text("Ember").font(.headline)
+            Spacer()
+            if store.refreshing { ProgressView().controlSize(.small) }
+            else if let t = store.lastRefresh {
+                Text(t.formatted(date: .omitted, time: .shortened)).font(.caption).foregroundStyle(.tertiary)
+                    .help("Dernière actualisation")
             }
-            .help(title).frame(maxWidth: .infinity).padding(.vertical, 6)
-                .background(pop.tab == id ? Color.orange.opacity(0.28) : .clear, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
-        }.buttonStyle(.plain)
-        .accessibilityLabel(title)
-        .accessibilityAddTraits(pop.tab == id ? .isSelected : [])
+            Button { store.refresh() } label: { Image(systemName: "arrow.clockwise") }
+                .buttonStyle(.borderless).help("Actualiser").accessibilityLabel("Actualiser").disabled(store.refreshing)
+                .keyboardShortcut("r")
+            Button { openSettings() } label: { Image(systemName: "gearshape") }
+                .buttonStyle(.borderless).help("Réglages").accessibilityLabel("Réglages")
+                .keyboardShortcut(",")
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 4)
     }
 
-    var general: some View {
+    /// Spend: today and 30 days, then the busiest sources (top 4).
+    var spend: some View {
         let month = store.filtered(.month)
-        let agents = store.providers.compactMap { p -> (ProviderInfo, Double, Int)? in
+        let agents = store.providers.compactMap { p -> (ProviderInfo, Double)? in
             let rs = store.filtered(.month, provider: p.id)
-            return rs.isEmpty ? nil : (p, store.totalCost(rs), store.totalTokens(rs))
+            return rs.isEmpty ? nil : (p, store.totalCost(rs))
         }.sorted { $0.1 > $1.1 }
         let maxCost = max(agents.first?.1 ?? 1, 0.0001)
-        return VStack(alignment: .leading, spacing: 12) {
-            if let s = store.session { SessionCard(s: s) }
-            HStack(spacing: 10) {
-                Tile(title: "Dépense 30 j", value: money(store.totalCost(month)), sub: "équivalent API")
-                Tile(title: "Tokens", value: compact(store.totalTokens(month)), sub: "\(agents.count) sources", tint: .blue)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                stat("Aujourd'hui", money(store.todayCost))
+                Spacer()
+                stat("30 jours", money(store.totalCost(month)))
+                Spacer()
+                stat("Tokens 30 j", compact(store.totalTokens(month)))
             }
-            if !store.quotas.isEmpty {
-                Text("Quota restant").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 2)
-                HStack(spacing: 10) {
-                    ForEach(Array(Set(store.quotas.map(\.provider))).sorted(), id: \.self) { pid in
-                        if let q = primaryQuota(store.quotas(for: pid)) {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(store.providerName(pid)).font(.caption).foregroundStyle(.secondary)
-                                Text(String(format: "%.0f %%", 100 - q.usedPercent)).font(.system(size: 22, weight: .bold, design: .rounded))
-                                shareBar((100 - q.usedPercent) / 100, .green)
-                            }
-                            .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                            .card(radius: 10)
-                            .accessibilityElement(children: .ignore)
-                            .accessibilityLabel("Quota \(store.providerName(pid))")
-                            .accessibilityValue(String(format: "%.0f %% restants", 100 - q.usedPercent))
-                        }
+            if agents.count > 1 {
+                Divider()
+                ForEach(agents.prefix(4), id: \.0.id) { p, c in
+                    HStack(spacing: 8) {
+                        ProviderIcon(id: p.id, symbol: p.symbol, size: 14)
+                        Text(p.name).font(.caption).lineLimit(1).frame(width: 92, alignment: .leading)
+                        shareBar(c / maxCost, color(for: p.id))
+                        Text(money(c)).font(.caption.monospacedDigit()).frame(width: 52, alignment: .trailing)
                     }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(p.name).accessibilityValue(money(c))
                 }
-            }
-            let others = store.providers.filter { if case .detectedNoData = $0.status { return true } else { return false } }
-            if !others.isEmpty {
-                Text("Autres IA détectées").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 2)
-                HStack(spacing: 8) {
-                    ForEach(others.prefix(7)) { p in ProviderIcon(id: p.id, symbol: p.symbol, size: 20).help(p.name).accessibilityLabel(p.name) }
-                    if others.count > 7 { Text("+\(others.count - 7)").font(.caption.weight(.medium)).foregroundStyle(.secondary) }
-                    Spacer()
-                    Text("\(others.count) sans données").font(.caption).foregroundStyle(.tertiary)
-                }
-                .padding(.horizontal, 12).padding(.vertical, 10).frame(maxWidth: .infinity).card(radius: 10)
-            }
-            Text("Sources les plus actives · 30 j").font(.caption.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 2)
-            ForEach(agents, id: \.0.id) { p, c, t in
-                VStack(spacing: 3) {
-                    HStack {
-                        ProviderIcon(id: p.id, symbol: p.symbol, size: 16)
-                        Text(p.name).font(.callout)
-                        Spacer()
-                        Text(compact(t)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                        Text(money(c)).font(.callout.weight(.semibold).monospacedDigit())
-                    }
-                    shareBar(c / maxCost, color(for: p.id))
-                }
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(p.name)
-                .accessibilityValue("\(money(c)), \(compact(t)) tokens")
             }
         }
+        .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+        .card(radius: 14)
     }
 
-    func providerTab(_ id: String) -> some View {
-        let qs = store.quotas(for: id)
-        let rs = store.filtered(.month, provider: id)
-        return VStack(alignment: .leading, spacing: 10) {
-            if id == "claude", let s = store.session { SessionCard(s: s) }
-            if let q = primaryQuota(qs) {
-                QuotaPanel(info: store.info(q), height: 130)
-                ForEach(qs.filter { $0 != q }) { o in
-                    let i = store.info(o)
-                    HStack {
-                        Text(o.title).font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        Text(String(format: "%.0f %% restants", i.remaining)).font(.caption.monospacedDigit())
-                        Badge(text: aheadText(i), good: i.ahead >= 0)
-                    }
-                }
-            } else if id == "claude" || id == "codex" {
-                QuotaMissing(provider: id)
+    func stat(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.system(size: 17, weight: .semibold, design: .rounded)).monospacedDigit()
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    var footer: some View {
+        HStack {
+            Button { openDashboard() } label: {
+                Label("Tableau de bord", systemImage: "chart.xyaxis.line").frame(maxWidth: .infinity)
             }
-            HStack(spacing: 10) {
-                Tile(title: "30 j", value: money(store.totalCost(rs)), tint: color(for: id))
-                Tile(title: "Tokens", value: compact(store.totalTokens(rs)), tint: .blue)
-            }
+            .emberProminent().tint(.orange).controlSize(.large).keyboardShortcut("d")
+            Button { NSApplication.shared.terminate(nil) } label: { Image(systemName: "power") }
+                .emberGlass().controlSize(.large)
+                .help("Quitter Ember").accessibilityLabel("Quitter Ember").keyboardShortcut("q")
         }
     }
 }
