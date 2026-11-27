@@ -45,6 +45,9 @@ extension EmberApp {
                         save(ProviderPage(id: "claude", data: store.filtered(.all, provider: "claude"), ui: ui).padding(20), "claude", w: 980)
                         save(ProviderPage(id: "codex", data: store.filtered(.all, provider: "codex"), ui: ui).padding(20), "codex", w: 980)
                         save(SourcesView().frame(height: 480), "sources", w: 600)
+                        for s in SpendStyle.allCases {
+                            save(SpendChart(data: store.filtered(.all), ui: ui, stacked: true, styleOverride: s).padding(20), "spend-" + s.rawValue, w: 980)
+                        }
                         save(MenuBarView(), "popover-general-light", w: 340, dark: false)
                         exit(0)
                     }

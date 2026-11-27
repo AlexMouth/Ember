@@ -292,6 +292,48 @@ private struct GeneralPane: View {
                 }
             }
         }
+        SettingsGroup("Tableau de bord", footer: "Le style s'applique au graphique « Dépense » de l'aperçu et des pages par agent.") {
+            SpendStylePicker()
+        }
+    }
+}
+
+/// Four tiles, one per spend-chart style.
+private struct SpendStylePicker: View {
+    @AppStorage("spendStyle") private var styleRaw = SpendStyle.stacked.rawValue
+
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+            ForEach(SpendStyle.allCases) { s in
+                let on = styleRaw == s.rawValue
+                Button { styleRaw = s.rawValue } label: {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: s.symbol)
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(on ? Color.white : Color.orange)
+                            .frame(width: 30, height: 30)
+                            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(on ? Color.orange : Color.orange.opacity(0.14)))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(s.label).font(.callout.weight(.semibold))
+                            Text(s.detail).font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(on ? Color.orange : Color.secondary.opacity(0.5))
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(on ? Color.orange.opacity(0.08) : Color.clear))
+                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(on ? Color.orange.opacity(0.6) : Color.primary.opacity(0.1), lineWidth: on ? 1.5 : 1))
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+        .padding(10)
     }
 }
 

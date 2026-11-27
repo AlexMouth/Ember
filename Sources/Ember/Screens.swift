@@ -437,76 +437,6 @@ struct DashboardView: View {
 
 // MARK: - Pages
 
-struct SpendChart: View {
-    @EnvironmentObject var store: Store
-    let data: [UsageRecord]
-    @ObservedObject var ui: DashState
-    var stacked: Bool
-    @StateObject private var hover = HoverState()
-
-    struct Pt: Identifiable { let id = UUID(); let date: Date; let source: String; let cost: Double }
-
-    static let df: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f }()
-
-    var unit: Calendar.Component { ui.mode == "Jour" ? .day : ui.mode == "Semaine" ? .weekOfYear : .month }
-
-    var pts: [Pt] {
-        let cal = Calendar.current
-        var acc: [String: Pt] = [:]
-        for (k, rs) in Dictionary(grouping: data, by: { $0.day + "|" + $0.provider }) {
-            let parts = k.split(separator: "|")
-            guard let d = Self.df.date(from: String(parts[0])) else { continue }
-            let b = cal.dateInterval(of: unit, for: d)?.start ?? d
-            let name = stacked ? store.providerName(String(parts[1])) : "Dépense"
-            let key = "\(b.timeIntervalSince1970)|\(name)"
-            let c = store.totalCost(rs)
-            acc[key] = Pt(date: b, source: name, cost: (acc[key]?.cost ?? 0) + c)
-        }
-        return acc.values.sorted { $0.date < $1.date }
-    }
-
-    @ChartContentBuilder var hoverRule: some ChartContent {
-        if let h = hover.date {
-            let b = Calendar.current.dateInterval(of: unit, for: h)?.start ?? h
-            let rows = pts.filter { $0.date == b }.sorted { $0.cost > $1.cost }
-            if !rows.isEmpty {
-                let fmt: Date.FormatStyle = unit == .month ? .dateTime.month(.wide).year() : .dateTime.day().month(.abbreviated).year()
-                RuleMark(x: .value("Date", b, unit: unit)).foregroundStyle(Color.primary.opacity(0.25))
-                    .annotation(position: .top, spacing: 4, overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))) {
-                        HoverTip(lines: (rows.count > 1 ? [("Total", money(rows.reduce(0) { $0 + $1.cost }))] : [])
-                                 + rows.map { ($0.source, money($0.cost)) },
-                                 title: (unit == .weekOfYear ? "Semaine du " : "") + b.formatted(fmt))
-                    }
-            }
-        }
-    }
-
-    var body: some View {
-        Section_(title: "Dépense", trailing: "USD équivalent API") {
-            AnyView(VStack(alignment: .leading) {
-                Picker("", selection: $ui.mode) { ForEach(["Jour", "Semaine", "Mois"], id: \.self) { Text($0) } }
-                    .pickerStyle(.segmented).frame(width: 240).labelsHidden()
-                if pts.isEmpty {
-                    Text("Aucune donnée sur cette période.").foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 160)
-                } else if stacked {
-                    Chart {
-                        ForEach(pts) { p in BarMark(x: .value("Date", p.date, unit: unit), y: .value("USD", p.cost)).foregroundStyle(by: .value("Source", p.source)) }
-                        hoverRule
-                    }
-                    .chartOverlay { hoverLayer($0, hover) }
-                    .frame(height: 220)
-                } else {
-                    Chart {
-                        ForEach(pts) { p in BarMark(x: .value("Date", p.date, unit: unit), y: .value("USD", p.cost)).foregroundStyle(Color.orange.gradient) }
-                        hoverRule
-                    }
-                    .chartOverlay { hoverLayer($0, hover) }
-                    .frame(height: 220)
-                }
-            })
-        }
-    }
-}
 
 struct OverviewPage: View {
     @EnvironmentObject var store: Store
@@ -535,8 +465,8 @@ struct OverviewPage: View {
             }
             SpendChart(data: data, ui: ui, stacked: true)
             HStack(alignment: .top, spacing: gridSpacing) {
-                BreakdownCard(title: "Par modèle", data: data, key: \.model, tint: .orange)
-                BreakdownCard(title: "Par projet", data: data, key: \.project, tint: .blue)
+                RankingCard(title: "Par modèle", data: data, key: \.model, tint: .orange)
+                RankingCard(title: "Par projet", data: data, key: \.project, tint: .blue)
             }
             let approx = Set(data.filter { Pricing.shared.isApproximate($0.model) }.map(\.model))
             if !approx.isEmpty {
@@ -579,100 +509,13 @@ struct ProviderPage: View {
                 Tile(title: "Tokens / $", value: cost > 0 ? compact(Int(Double(tok) / cost)) : "—", tint: .green)
                 Tile(title: "Modèles", value: "\(models.count)", tint: .purple)
             }
-            SpendChart(data: data, ui: ui, stacked: false)
-            Section_(title: "Modèles", trailing: "\(models.count)") {
-                AnyView(VStack(spacing: 8) {
-                    ForEach(models, id: \.name) { row in
-                        let c = row.cost
-                        VStack(spacing: 3) {
-                            HStack {
-                                Text(row.name).lineLimit(1)
-                                if Pricing.shared.isApproximate(row.name) { Text("≈").foregroundStyle(.orange).help("Prix approché") }
-                                Spacer()
-                                Text(compact(row.tokens)).font(.callout.monospacedDigit()).foregroundStyle(.secondary)
-                                Text(money(c)).font(.callout.monospacedDigit()).frame(width: 70, alignment: .trailing)
-                            }
-                            shareBar(cost > 0 ? c / cost : 0, color(for: id))
-                        }
-                    }
-                })
+            SpendChart(data: data, ui: ui, stacked: false, provider: id)
+            HStack(alignment: .top, spacing: gridSpacing) {
+                RankingCard(title: "Modèles", data: data, key: \.model, tint: color(for: id))
+                RankingCard(title: "Projets", data: data, key: \.project, tint: .blue)
             }
             TokenBreakdown(data: data)
-            let projects = store.breakdown(data, by: \.project).prefix(12)
-            Section_(title: "Projets", trailing: "top \(projects.count)") {
-                AnyView(VStack(spacing: 8) {
-                    ForEach(Array(projects), id: \.name) { row in
-                        HStack {
-                            Text(row.name.isEmpty ? "—" : row.name).lineLimit(1)
-                            Spacer()
-                            Text(compact(row.tokens)).font(.callout.monospacedDigit()).foregroundStyle(.secondary)
-                            Text(money(row.cost)).font(.callout.monospacedDigit()).frame(width: 70, alignment: .trailing)
-                        }
-                    }
-                })
-            }
         }
     }
 }
 
-/// Top-N cost ranking over any record field (model, project…).
-struct BreakdownCard: View {
-    @EnvironmentObject var store: Store
-    let title: String
-    let data: [UsageRecord]
-    let key: KeyPath<UsageRecord, String>
-    var tint: Color = .orange
-
-    var body: some View {
-        let rows = store.breakdown(data, by: key)
-        let top = Array(rows.prefix(8))
-        let maxCost = max(top.first?.cost ?? 1, 0.0001)
-        return Section_(title: title, trailing: "top \(top.count) sur \(rows.count)") {
-            AnyView(VStack(spacing: 9) {
-                if top.isEmpty { Text("Aucune donnée.").foregroundStyle(.secondary) }
-                ForEach(top, id: \.name) { r in
-                    VStack(spacing: 3) {
-                        HStack {
-                            Text(r.name.isEmpty ? "—" : r.name).lineLimit(1).truncationMode(.middle)
-                            Spacer()
-                            Text(compact(r.tokens)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                            Text(money(r.cost)).font(.callout.weight(.medium).monospacedDigit()).frame(width: 64, alignment: .trailing)
-                        }
-                        shareBar(r.cost / maxCost, tint)
-                    }
-                }
-            })
-        }
-    }
-}
-
-struct TokenBreakdown: View {
-    let data: [UsageRecord]
-    var body: some View {
-        let parts: [(String, Int, Color)] = [
-            ("Entrée", data.reduce(0) { $0 + $1.input }, .blue), ("Sortie", data.reduce(0) { $0 + $1.output }, .orange),
-            ("Cache écrit", data.reduce(0) { $0 + $1.cacheWrite }, .purple), ("Cache lu", data.reduce(0) { $0 + $1.cacheRead }, .teal),
-        ]
-        let total = max(parts.reduce(0) { $0 + $1.1 }, 1)
-        return Section_(title: "Répartition des tokens") {
-            AnyView(VStack(alignment: .leading, spacing: 10) {
-                GeometryReader { g in
-                    HStack(spacing: 1) {
-                        ForEach(parts, id: \.0) { p in
-                            Rectangle().fill(p.2).frame(width: max(p.1 > 0 ? 2 : 0, g.size.width * Double(p.1) / Double(total)))
-                        }
-                    }.clipShape(RoundedRectangle(cornerRadius: 4))
-                }.frame(height: 10)
-                HStack {
-                    ForEach(parts, id: \.0) { p in
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 4) { Circle().fill(p.2).frame(width: 6, height: 6); Text(p.0).font(.caption).foregroundStyle(.secondary) }
-                            Text(compact(p.1)).font(.title3.weight(.semibold).monospacedDigit())
-                            Text(String(format: "%.1f %%", 100 * Double(p.1) / Double(total))).font(.caption2).foregroundStyle(.tertiary)
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-            })
-        }
-    }
-}
