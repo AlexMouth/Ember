@@ -1,123 +1,141 @@
 <div align="center">
 
-<img src="assets/icon-1024.png" width="128" alt="Logo Ember">
+<img src="assets/icon-1024.png" width="112" alt="Logo Ember">
 
 # Ember
 
-**Ce que te coûtent vraiment tes IA de développement, dans la barre des menus de ton Mac.**
+**Le coût réel de tes IA de développement, dans la barre des menus de ton Mac.**
 
-Claude Code · Codex · Gemini CLI · Kiro CLI · Cursor
+Quotas en direct · dépense en équivalent API · projections · 100 % local
 
 [![Dernière version](https://img.shields.io/github/v/release/AlexMouth/Ember?label=version&color=F97316)](https://github.com/AlexMouth/Ember/releases/latest)
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-111111?logo=apple)
-![Swift 6](https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white)
 ![Universel](https://img.shields.io/badge/Apple%20Silicon%20%2B%20Intel-universel-555555)
+![Swift 6](https://img.shields.io/badge/Swift-6-F05138?logo=swift&logoColor=white)
 ![100 % local](https://img.shields.io/badge/donn%C3%A9es-100%20%25%20locales-22C55E)
 
-[**Télécharger**](https://github.com/AlexMouth/Ember/releases/latest) · [Fonctionnalités](#fonctionnalités) · [Installation](#installation) · [Prix des modèles](#prix-des-modèles) · [Développement](#développement)
+### [⬇︎ Télécharger Ember](https://github.com/AlexMouth/Ember/releases/latest)
+
+[Pourquoi Ember](#pourquoi-ember) · [Fonctionnalités](#fonctionnalités) · [Agents pris en charge](#agents-pris-en-charge) · [Installation](#installation) · [Confidentialité](#confidentialité) · [Prix des modèles](#prix-des-modèles) · [Développement](#développement)
 
 </div>
 
 ---
 
-Ember lit les journaux que tes agents laissent déjà sur ton disque et en tire trois réponses, sans compte ni serveur :
+## Pourquoi Ember
 
-- **Combien il me reste ?** Le quota de ton abonnement (fenêtre de 5 h, hebdomadaire), en pourcentage, avec l'heure du prochain reset.
-- **Combien ça m'aurait coûté ?** La dépense en équivalent API, par jour, par modèle, par projet.
-- **Est-ce que je tiens le rythme ?** Une courbe de consommation comparée au rythme idéal, et une projection jusqu'au reset.
+Tes agents de code laissent déjà des journaux détaillés sur ton disque. Ember les lit et répond à trois questions, sans compte, sans serveur et sans configuration :
+
+| | Question | Réponse d'Ember |
+| :---: | --- | --- |
+| 🔋 | **Combien il me reste ?** | Le quota de ton abonnement (fenêtre de 5 h et hebdomadaire), avec l'heure du prochain reset. |
+| 💸 | **Combien ça m'aurait coûté ?** | La dépense en équivalent API, par jour, par modèle et par projet. |
+| 📈 | **Est-ce que je tiens le rythme ?** | Ta consommation comparée au rythme idéal, et une projection jusqu'au reset. |
 
 ## Fonctionnalités
 
-### 🔥 Dans la barre des menus
+### Barre des menus
 
-- **Une flamme qui change de couleur :** verte tant que le quota va bien, orange dès 80 % utilisés, rouge dès 95 %. Elle peut être accompagnée d'une mini-jauge.
-- **Le chiffre qui compte :** quota restant ou dépense du jour, au choix.
-- **Le popover :**
-  - une carte par quota, avec le pourcentage restant en grand et les barres 5 h et hebdomadaire ;
-  - la session Claude Code en cours (projet, durée, coût, modèle) ;
-  - la dépense du jour et des 30 jours, et les sources les plus utilisées.
-- **Raccourcis :** <kbd>⌘R</kbd> actualiser · <kbd>⌘,</kbd> réglages · <kbd>⌘D</kbd> tableau de bord · <kbd>⌘Q</kbd> quitter.
+Une flamme discrète, **verte** tant que tout va bien, **orange** à partir de 80 % du quota, **rouge** à partir de 95 %. À côté, le chiffre qui t'intéresse : quota restant ou dépense du jour, avec une mini-jauge en option.
 
-### 📊 Tableau de bord
+Un clic ouvre le popover :
 
-- **Aperçu :** dépense, tokens, rythme et projection du mois.
-- **Graphique de dépense** par jour, par semaine ou par mois, ventilé par source.
-- **Courbes de « burn-down » des quotas :**
-  - zones d'avance et de retard ;
-  - projection au rythme actuel ;
-  - infobulle au survol, y compris sur les valeurs à venir.
-- **Répartition par modèle et par projet,** et une page par agent (modèles, projets, types de tokens).
+- une carte par quota, avec le pourcentage restant et les barres 5 h et hebdomadaire ;
+- la session Claude Code en cours : projet, durée, coût et modèle ;
+- la dépense du jour et des 30 derniers jours, et les sources les plus actives.
 
-### 🔑 Quota Claude en direct
+<kbd>⌘R</kbd> actualiser · <kbd>⌘D</kbd> tableau de bord · <kbd>⌘,</kbd> réglages · <kbd>⌘Q</kbd> quitter
 
-- **Ce qu'Ember lit :** le vrai pourcentage de ton abonnement, lu sur `api.anthropic.com` avec le jeton de Claude Code. Ember lit ce jeton dans le trousseau, en **lecture seule**, et ne le renouvelle ni ne l'écrit jamais.
-- **Si le jeton a expiré :** Ember le signale. Relancer `claude` suffit à le renouveler ; en attendant, le quota est estimé à partir de ta consommation.
+### Tableau de bord
 
-### 🔔 Alertes
+- **Vue d'ensemble :** dépense, tokens, rythme et projection du mois.
+- **Courbes de quota :** consommation réelle face au rythme idéal, zones d'avance et de retard, projection au rythme actuel et infobulle au survol.
+- **Classements :** modèles et projets triés par coût, avec barre proportionnelle et part du total.
+- **Répartition des tokens :** entrée, sortie, lecture et écriture du cache, sur une échelle logarithmique pour que les petites catégories restent lisibles.
+- **Une page par agent,** avec ses propres modèles, projets et tokens.
+
+Le graphique de dépense existe en **quatre styles**, au choix dans *Réglages › Général › Tableau de bord* :
+
+| Style | Ce qu'il montre |
+| --- | --- |
+| **Barres et moyenne** | Barres empilées par source ou par modèle, avec la moyenne. Par jour, semaine ou mois. |
+| **Cumul du mois** | Courbe cumulée, projection de fin de mois et comparaison avec le mois dernier. |
+| **Calendrier** | Un carré par jour, coloré selon la dépense. |
+| **Période en cours** | Barres fines, période en cours mise en avant, sans les jours vides. |
+
+### Quota Claude en direct
+
+Ember affiche le **vrai pourcentage** de ton abonnement Claude, lu sur `api.anthropic.com` avec le jeton de Claude Code. Ce jeton est lu dans le trousseau **en lecture seule** : Ember ne le renouvelle et ne l'écrit jamais.
+
+Si le jeton a expiré, Ember le signale et estime le quota à partir de ta consommation. Relancer `claude` suffit à le renouveler.
+
+### Alertes
 
 - **Budget mensuel :** notification à 80 % puis à 100 %.
-- **Quota :** notification quand il reste 30, 20, 10 ou 5 %, et quand la limite est atteinte.
+- **Quota :** notification quand il reste 30, 20, 10 ou 5 %, puis quand la limite est atteinte.
 
-### ⚙️ Réglages
+### Réglages
 
-- **Une fenêtre façon Réglages Système,** avec un aperçu en direct de l'icône de la barre des menus.
-- **Page « Données et prix » :** pour chaque modèle utilisé, le prix appliqué, le coût et l'origine du prix.
-- **Fichiers :** export CSV de toute la consommation, et dossier de données accessible en un clic.
+- Une fenêtre dans l'esprit de Réglages Système, avec un aperçu en direct de l'icône de la barre des menus.
+- **Données et prix :** pour chaque modèle utilisé, le prix appliqué, le coût total et l'origine du prix.
+- **Export CSV** de toute la consommation, et accès en un clic au dossier de données.
+- **Zone de danger :** effacement des données d'Ember, protégé par une confirmation par saisie.
 
-### 🔍 Détection automatique
+### Mises à jour intégrées
 
-- **Nouvelles IA :** une IA installée ou lancée sur le Mac (Copilot, ChatGPT, Kimi…) apparaît dans les Sources, même si elle ne laisse aucun compteur lisible.
+Ember se met à jour depuis les Releases GitHub. Chaque archive porte une **signature Ed25519**, vérifiée avant l'installation ; en cas d'échec, l'ancienne version est restaurée.
 
-### ⬇️ Mises à jour intégrées
+## Agents pris en charge
 
-- **Source :** les nouvelles versions viennent des Releases GitHub.
-- **Vérification :** chaque archive a une **signature Ed25519**, vérifiée avant l'installation.
-- **Retour arrière :** si l'installation échoue, Ember restaure l'ancienne version.
+| Agent | Dépense et tokens | Quota | Source lue |
+| --- | :---: | :---: | --- |
+| **Claude Code** | ✓ | ✓ en direct | `~/.claude/projects/**/*.jsonl` |
+| **Codex** | ✓ | ✓ | `~/.codex/sessions/**/*.jsonl` |
+| **Gemini CLI** | ✓ | — | `~/.gemini/tmp/*/chats/*.json` |
+| **Kiro CLI** | ✓ | — | base SQLite locale de Kiro |
+| **Cursor** | ✓ si disponible | — | `state.vscdb` |
 
-## Confidentialité
-
-> **Tout est calculé sur ton Mac.** Ember ne collecte rien, n'a pas de serveur et n'envoie aucune statistique d'usage.
-
-Une seule requête réseau sort d'Ember : la lecture du quota Claude en direct, envoyée à `api.anthropic.com` avec ton propre jeton. Elle se coupe dans Réglages › Compte Claude. La vérification des mises à jour interroge en plus l'API publique de GitHub.
-
-| Agent | Ce qu'Ember lit |
-| --- | --- |
-| Claude Code | `~/.claude/projects/**/*.jsonl` |
-| Codex | `~/.codex/sessions/**/*.jsonl` |
-| Gemini CLI | `~/.gemini/tmp/*/chats/*.json` |
-| Kiro CLI | base SQLite locale de Kiro |
-| Cursor | `state.vscdb` (quand il contient des compteurs) |
-
-Tous ces fichiers sont ouverts en lecture seule. Ember garde son cache et son historique de quota (35 jours) dans `~/Library/Application Support/Ember`.
+Ember repère aussi les autres IA installées ou lancées sur le Mac (Copilot, ChatGPT, Kimi…) et les liste dans les Sources, même lorsqu'elles ne laissent aucun compteur lisible.
 
 ## Installation
 
 1. Télécharge **`Ember-x.y.z.dmg`** depuis la [dernière release](https://github.com/AlexMouth/Ember/releases/latest).
 2. Ouvre le `.dmg` et glisse **Ember** dans **Applications**.
-3. Lance Ember : une flamme apparaît dans la barre des menus.
+3. Lance Ember : la flamme apparaît dans la barre des menus.
 
 > [!NOTE]
-> Ember est signé en ad-hoc mais pas notarisé par Apple. Au premier lancement, fais un clic droit sur Ember, puis **Ouvrir** et encore **Ouvrir**. Si macOS bloque toujours l'app :
+> Ember est signé en ad-hoc mais n'est pas notarisé par Apple. Au premier lancement, fais un clic droit sur Ember, puis **Ouvrir**, et confirme avec **Ouvrir**. Si macOS bloque toujours l'app :
+>
 > ```bash
 > xattr -dr com.apple.quarantine /Applications/Ember.app
 > ```
 
-**Configuration requise :** macOS 14 Sonoma ou plus récent, Apple Silicon ou Intel. Sur macOS 26, l'interface utilise Liquid Glass.
+**Configuration requise :** macOS 14 Sonoma ou plus récent, sur Apple Silicon ou Intel. Sur macOS 26, l'interface adopte Liquid Glass.
+
+## Confidentialité
+
+> [!IMPORTANT]
+> **Tout est calculé sur ton Mac.** Ember n'a ni compte ni serveur, ne collecte rien et n'envoie aucune statistique d'usage.
+
+- **Fichiers :** les journaux des agents sont ouverts en lecture seule. Le cache et l'historique de quota (35 jours) restent dans `~/Library/Application Support/Ember`.
+- **Réseau :** deux appels seulement.
+  - La lecture du quota Claude sur `api.anthropic.com`, avec ton propre jeton. Elle se désactive dans *Réglages › Compte Claude*.
+  - La vérification des mises à jour, via l'API publique de GitHub.
 
 ## Prix des modèles
 
-Les coûts sont calculés en **équivalent API** : ce que tu aurais payé à l'usage pour les mêmes tokens. Ember cherche le prix de chaque modèle dans quatre sources, par ordre de priorité :
+Les coûts sont exprimés en **équivalent API** : ce que tu aurais payé à l'usage pour les mêmes tokens. Pour chaque modèle, Ember retient le premier prix trouvé dans cet ordre :
 
-| Priorité | Source | Fichier |
+| # | Source | Emplacement |
 | :---: | --- | --- |
 | 1 | **Tes prix personnalisés** | `~/Library/Application Support/Ember/pricing-overrides.json` |
-| 2 | **[models.dev](https://models.dev)**, une copie intégrée à l'app | `Sources/Ember/Resources/pricing.json` |
+| 2 | **[models.dev](https://models.dev)**, copie intégrée à l'app | `Sources/Ember/Resources/pricing.json` |
 | 3 | **Prix intégrés** pour les modèles absents de models.dev | `Sources/Ember/Resources/pricing-fallbacks.json` |
 | 4 | **Même famille (≈)** : un nouveau modèle hérite du prix de sa famille (`opus`, `sonnet`, `gpt-5`…) | `Sources/Ember/Resources/pricing-fallbacks.json` |
 
-Un modèle introuvable dans toutes ces sources est compté **0 $** et signalé en rouge dans **Réglages › Données et prix**. Cette page montre le prix appliqué à chaque modèle et son origine.
+Un modèle sans prix connu est compté **0 $** et signalé en rouge dans *Réglages › Données et prix*.
 
-Pour corriger un prix, clique sur **Ouvrir…** dans cette page, modifie le fichier, puis clique sur **Recharger**. Le format est en USD par million de tokens, et le nom du modèle est insensible à la casse :
+Pour corriger un prix, clique sur **Ouvrir…** dans cette page, modifie le fichier, puis clique sur **Recharger** : pas besoin de relancer Ember. Les valeurs sont en USD par million de tokens, et le nom du modèle est insensible à la casse :
 
 ```json
 {
@@ -125,32 +143,31 @@ Pour corriger un prix, clique sur **Ouvrir…** dans cette page, modifie le fich
 }
 ```
 
-Les quatre valeurs sont, dans l'ordre : entrée, sortie, lecture du cache et écriture du cache.
+Dans l'ordre : entrée, sortie, lecture du cache, écriture du cache.
 
 ## Développement
 
-**Prérequis :** macOS 14 ou plus récent, et Xcode ou les Command Line Tools (Swift 6).
+**Prérequis :** macOS 14 ou plus récent, avec Xcode ou les Command Line Tools (Swift 6).
+
+Compiler l'app :
 
 ```bash
 ./scripts/build_app.sh
 ```
 
+La lancer :
+
 ```bash
 open build/Ember.app
 ```
+
+Lancer les tests :
 
 ```bash
 ./scripts/test.sh
 ```
 
-`build_app.sh` compile en release (`-Osize`, binaire nettoyé) et signe l'app en ad-hoc. `test.sh` lance la suite swift-testing, qui couvre :
-
-- les prix ;
-- les projections de quota ;
-- la lecture des journaux de chaque agent ;
-- le cache ;
-- l'export CSV ;
-- la vérification des mises à jour.
+`build_app.sh` compile en release (`-Osize`, binaire nettoyé) et signe l'app en ad-hoc. `test.sh` lance la suite swift-testing : prix, projections de quota, lecture des journaux de chaque agent, cache, export CSV et vérification des mises à jour.
 
 <details>
 <summary><b>Variables de compilation</b></summary>
@@ -175,22 +192,24 @@ Ces variables s'appliquent à `build_app.sh`, et donc aussi à `release.sh`.
 <br>
 
 ```bash
-VERSION=0.5.2 ./scripts/release.sh
+VERSION=0.6.0 ./scripts/release.sh
 ```
 
-Le script produit quatre fichiers dans `dist/`, et **les quatre doivent être joints à la Release GitHub** :
+Le script produit quatre fichiers dans `dist/`. **Les quatre doivent être joints à la Release GitHub :**
 
-- `Ember-<version>.dmg` ;
-- `Ember-<version>.zip` ;
-- `Ember-<version>.zip.sig` ;
-- `Ember-<version>.zip.sha256`.
+| Fichier | Rôle |
+| --- | --- |
+| `Ember-<version>.dmg` | installation manuelle |
+| `Ember-<version>.zip` | archive de la mise à jour intégrée |
+| `Ember-<version>.zip.sig` | signature Ed25519 du ZIP, obligatoire |
+| `Ember-<version>.zip.sha256` | empreinte, utilisée seulement par les versions 0.4.2 et antérieures |
 
-La mise à jour intégrée refuse tout ZIP dont la signature Ed25519 (le `.zip.sig`) est absente ou invalide. Le `.sha256` ne sert plus qu'aux versions 0.4.2 et antérieures.
+La mise à jour intégrée refuse tout ZIP dont la signature est absente ou invalide.
 
-La clé privée de signature ne quitte jamais la machine : elle est dans `~/.config/ember/update-signing.key`, ou à l'emplacement donné par `$EMBER_SIGNING_KEY`. La clé publique correspondante est intégrée dans `Updater.swift`.
+**Clé de signature :** elle ne quitte jamais la machine. Elle se trouve dans `~/.config/ember/update-signing.key`, ou à l'emplacement donné par `$EMBER_SIGNING_KEY`. La clé publique correspondante est intégrée dans `Updater.swift`.
 
-- **Création de la clé** (une seule fois) : `swift scripts/sign_update.swift genkey`.
-- **Sauvegarde-la :** sans elle, les copies déjà installées ne peuvent plus se mettre à jour.
+- Pour la créer, une seule fois : `swift scripts/sign_update.swift genkey`.
+- Sauvegarde-la : sans elle, les copies déjà installées ne peuvent plus se mettre à jour.
 
 **Notarisation** (facultative, nécessite un compte Developer ID) :
 
@@ -200,7 +219,7 @@ La clé privée de signature ne quitte jamais la machine : elle est dans `~/.con
    ```
 2. Puis, à chaque version :
    ```bash
-   SIGN_IDENTITY="Developer ID Application: Nom (TEAMID)" NOTARY_PROFILE=<profil> VERSION=0.5.2 ./scripts/release.sh
+   SIGN_IDENTITY="Developer ID Application: Nom (TEAMID)" NOTARY_PROFILE=<profil> VERSION=0.6.0 ./scripts/release.sh
    ```
 
 </details>
@@ -213,7 +232,7 @@ La clé privée de signature ne quitte jamais la machine : elle est dans `~/.con
 | Commande | Effet |
 | --- | --- |
 | `Ember --dump` | affiche les totaux lus pour chaque agent |
-| `Ember --snapshot <dossier>` | rend les écrans principaux en PNG |
+| `Ember --snapshot <dossier>` | rend les écrans principaux et les 4 styles de graphique en PNG |
 | `Ember --open-settings --settings-pane data` | ouvre directement une page des Réglages |
 
 Le logo se régénère avec `swift scripts/make_icon.swift && ./scripts/make_icns.sh`.
@@ -231,6 +250,7 @@ Le logo se régénère avec `swift scripts/make_icon.swift && ./scripts/make_icn
 | `Sources/Ember/Store.swift` | état, rafraîchissement, alertes |
 | `Sources/Ember/Quota.swift` | modèle et calculs de quota (rythme, projection) |
 | `Sources/Ember/QuotaViews.swift` | courbes, cartes, infobulles |
+| `Sources/Ember/SpendViews.swift` | graphique de dépense (4 styles), classements, répartition des tokens |
 | `Sources/Ember/Screens.swift` | popover, tableau de bord, pages par agent |
 | `Sources/Ember/SettingsView.swift` | fenêtre des Réglages |
 | `Sources/Ember/Pricing.swift` | résolution des prix (personnalisé, models.dev, intégré, famille) |
@@ -242,5 +262,6 @@ Le logo se régénère avec `swift scripts/make_icon.swift && ./scripts/make_icn
 
 ## Crédits
 
-- **Prix des modèles :** [models.dev](https://models.dev).
-- **Projet :** Ember est un projet indépendant, sans lien avec Anthropic, OpenAI, Google, Amazon ou Anysphere. Les noms des agents appartiennent à leurs propriétaires respectifs.
+Prix des modèles fournis par [models.dev](https://models.dev).
+
+Ember est un projet indépendant, sans lien avec Anthropic, OpenAI, Google, Amazon ou Anysphere. Les noms des agents appartiennent à leurs propriétaires respectifs.
