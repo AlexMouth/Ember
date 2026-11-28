@@ -71,7 +71,7 @@ import Testing
         let user = #"{"type":"user","timestamp":"2026-05-01T10:00:01.000Z"}"#
         let f = dir.appendingPathComponent("a.jsonl")
         try [line(3), user, line(40)].joined(separator: "\n").write(to: f, atomically: true, encoding: .utf8)
-        let es = ClaudeCode().parse(f.path)
+        let es = ClaudeCode.parse(data: try Data(contentsOf: f))
         #expect(es.count == 1)
         #expect(es[0].output == 40)
         #expect(es[0].session == "s1")
@@ -350,6 +350,76 @@ private func lines(_ s: String) -> [Substring] { s.split(separator: "\n") }
         // A modified file is parsed again.
         try "changed!".write(toFile: a, atomically: true, encoding: .utf8)
         #expect(reloaded.entries(for: a) { [entry("a2")] }.first?.key == "a2")
+    }
+
+    @Test func appendedLogsParseOnlyNewBytes() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        func line(_ id: String, _ out: Int) -> String {
+            #"{"type":"assistant","timestamp":"2026-05-01T10:00:00Z","requestId":"r\#(id)","message":{"id":"\#(id)","model":"claude-sonnet-4-5","usage":{"input_tokens":1,"output_tokens":\#(out)}}}"#
+        }
+        let f = dir.appendingPathComponent("s.jsonl")
+        let c = FileCache(url: dir.appendingPathComponent("c.json"))
+        var parsedBytes = 0
+        func scan() -> [String: Int] {
+            let es = c.appendedEntries(for: f.path, parse: { parsedBytes += $0.count; return ClaudeCode.parse(data: $0) },
+                                       merge: ClaudeCode.merge)
+            return Dictionary(uniqueKeysWithValues: es.map { ($0.key, $0.output) })
+        }
+        func append(_ s: String) throws {
+            let h = try FileHandle(forWritingTo: f)
+            try h.seekToEnd(); try h.write(contentsOf: Data(s.utf8)); try h.close()
+        }
+
+        try (line("a", 3) + "\n").write(to: f, atomically: false, encoding: .utf8)
+        #expect(scan() == ["a|ra": 3])
+        let firstSize = parsedBytes
+
+        // A trailing line without newline is counted, then read again once it is complete.
+        try append(line("b", 5))
+        parsedBytes = 0
+        #expect(scan() == ["a|ra": 3, "b|rb": 5])
+        #expect(parsedBytes == line("b", 5).utf8.count)   // only the new bytes
+        try append("\n" + line("a", 40) + "\n")
+        parsedBytes = 0
+        #expect(scan() == ["a|ra": 40, "b|rb": 5])
+        #expect(parsedBytes < firstSize * 3)
+
+        // Unchanged file: nothing parsed at all.
+        parsedBytes = 0
+        _ = scan()
+        #expect(parsedBytes == 0)
+
+        // Survives a reload of the cache from disk.
+        c.save()
+        let reloaded = FileCache(url: dir.appendingPathComponent("c.json"))
+        try append(line("c", 1) + "\n")
+        parsedBytes = 0
+        let es = reloaded.appendedEntries(for: f.path, parse: { parsedBytes += $0.count; return ClaudeCode.parse(data: $0) },
+                                          merge: ClaudeCode.merge)
+        #expect(Set(es.map(\.key)) == ["a|ra", "b|rb", "c|rc"])
+        #expect(parsedBytes == line("c", 1).utf8.count + 1)
+    }
+
+    @Test func rewrittenLogIsParsedInFull() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        func line(_ id: String) -> String {
+            #"{"type":"assistant","timestamp":"2026-05-01T10:00:00Z","requestId":"r","message":{"id":"\#(id)","model":"claude-sonnet-4-5","usage":{"output_tokens":1}}}"# + "\n"
+        }
+        let f = dir.appendingPathComponent("s.jsonl")
+        let c = FileCache(url: dir.appendingPathComponent("c.json"))
+        func scan() -> Set<String> {
+            Set(c.appendedEntries(for: f.path, parse: ClaudeCode.parse(data:), merge: ClaudeCode.merge).map(\.key))
+        }
+        try line("a").write(to: f, atomically: false, encoding: .utf8)
+        #expect(scan() == ["a|r"])
+        // Same path, different content and longer: the old entry must not survive.
+        try (line("x") + line("y")).write(to: f, atomically: false, encoding: .utf8)
+        #expect(scan() == ["x|r", "y|r"])
+        // Truncated.
+        try line("z").write(to: f, atomically: false, encoding: .utf8)
+        #expect(scan() == ["z|r"])
     }
 
     @Test func pruneIgnoresSiblingPrefixes() throws {

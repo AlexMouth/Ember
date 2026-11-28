@@ -17,16 +17,28 @@ struct ClaudeCode: UsageProvider {
         let keep = Set(all)
         for r in roots { cache.prune(keeping: keep, prefix: expand(r)) }
         for f in all {
-            let es = cache.entries(for: f) { parse(f) }
+            let es = cache.appendedEntries(for: f, parse: Self.parse(data:), merge: Self.merge)
             for e in es where seen.insert(e.key).inserted { out.entries.append(e) }
         }
         return out
     }
 
-    func parse(_ path: String) -> [Entry] {
+    /// Parses a chunk of a session log; only lines that can carry usage are kept in memory.
+    static func parse(data: Data) -> [Entry] {
         var lines: [Substring] = []
-        readLines(path) { lines.append($0) }
-        return Self.parse(lines: lines)
+        forEachLine(in: data) { if $0.contains("\"usage\"") { lines.append($0) } }
+        return parse(lines: lines)
+    }
+
+    /// Merges entries parsed from newly appended lines into the cached ones, with the same rule as `parse`:
+    /// for a message written several times, the later write wins unless it reports fewer output tokens.
+    static func merge(_ old: [Entry], _ new: [Entry]) -> [Entry] {
+        var best = Dictionary(old.map { ($0.key, $0) }) { a, b in a.output >= b.output ? a : b }
+        for e in new {
+            if let o = best[e.key], o.output > e.output { continue }
+            best[e.key] = e
+        }
+        return Array(best.values)
     }
 
     static func parse<S: Sequence>(lines: S) -> [Entry] where S.Element == Substring {

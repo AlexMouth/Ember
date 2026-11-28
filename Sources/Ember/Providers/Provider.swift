@@ -43,7 +43,14 @@ protocol UsageProvider: Sendable {
 /// Per-file parse cache keyed by path + mtime + size, so rescans only touch changed files.
 /// Thread-safe: providers scan concurrently and share one instance.
 final class FileCache: @unchecked Sendable {
-    struct CachedFile: Codable { var sig: String; var entries: [Entry] }
+    struct CachedFile: Codable {
+        var sig: String
+        var entries: [Entry]
+        // Append-only logs only: bytes already parsed, file identity and a hash of the bytes just before `offset`.
+        var offset: Int? = nil
+        var inode: UInt64? = nil
+        var tailHash: UInt64? = nil
+    }
     private var store: [String: CachedFile] = [:]
     private var dirty = false
     private let url: URL
@@ -57,8 +64,20 @@ final class FileCache: @unchecked Sendable {
     }
 
     static func signature(_ path: String) -> String {
-        let attrs = try? FileManager.default.attributesOfItem(atPath: path)
-        return "\((attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)|\(attrs?[.size] ?? 0)"
+        signature(try? FileManager.default.attributesOfItem(atPath: path))
+    }
+
+    private static func signature(_ attrs: [FileAttributeKey: Any]?) -> String {
+        "\((attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)|\(attrs?[.size] ?? 0)"
+    }
+
+    /// FNV-1a over the (up to) 256 bytes that end at `offset`: detects a file rewritten under the same name.
+    static func tailHash(_ data: Data, upTo offset: Int) -> UInt64 {
+        var h: UInt64 = 0xcbf2_9ce4_8422_2325
+        for b in data[data.startIndex + max(0, offset - 256) ..< data.startIndex + offset] {
+            h = (h ^ UInt64(b)) &* 0x0000_0100_0000_01b3
+        }
+        return h
     }
 
     func entries(for path: String, parse: () -> [Entry]) -> [Entry] {
@@ -69,6 +88,32 @@ final class FileCache: @unchecked Sendable {
         let parsed = parse()
         lock.lock(); store[path] = CachedFile(sig: sig, entries: parsed); dirty = true; lock.unlock()
         return parsed
+    }
+
+    /// For append-only logs (JSONL): parses only the bytes added since the last scan and merges them into the
+    /// cached entries. The trailing line without a newline is parsed but not consumed, so it is read again next
+    /// time; `merge` must therefore tolerate duplicates. A replaced, truncated or rewritten file is parsed in full.
+    func appendedEntries(for path: String, parse: (Data) -> [Entry], merge: ([Entry], [Entry]) -> [Entry]) -> [Entry] {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+        let sig = Self.signature(attrs)
+        let inode = (attrs?[.systemFileNumber] as? NSNumber)?.uint64Value
+        lock.lock()
+        let cached = store[path]
+        lock.unlock()
+        if let c = cached, c.sig == sig { return c.entries }
+
+        let data = (try? Data(contentsOf: URL(fileURLWithPath: path), options: .mappedIfSafe)) ?? Data()
+        var start = 0
+        if let c = cached, let off = c.offset, off <= data.count, c.inode == inode, c.tailHash == Self.tailHash(data, upTo: off) {
+            start = off
+        }
+        let fresh = data[(data.startIndex + start)...]
+        let consumed = fresh.lastIndex(of: 0x0A).map { $0 - data.startIndex + 1 } ?? start
+        let parsed = parse(fresh)
+        let entries = start > 0 ? merge(cached?.entries ?? [], parsed) : parsed
+        let file = CachedFile(sig: sig, entries: entries, offset: consumed, inode: inode, tailHash: Self.tailHash(data, upTo: consumed))
+        lock.lock(); store[path] = file; dirty = true; lock.unlock()
+        return entries
     }
 
     /// Drops cached files under `prefix` that no longer exist on disk.
